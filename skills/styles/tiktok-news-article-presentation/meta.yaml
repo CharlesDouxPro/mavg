@@ -1,0 +1,19 @@
+display-name-zh: 短视频新闻口播生成器
+version: 0.1.0
+tag-en: "News & Talking Head"
+tag-cn: "资讯口播"
+complete-tags-en:
+  - "News & Talking Head / Planning"
+  - "News & Talking Head / Creative Generation"
+  - "Social Video / Creative Generation"
+complete-tags-cn:
+  - "资讯口播 / 计划制定"
+  - "资讯口播 / 创作生成"
+  - "社交视频 / 创作生成"
+summary-en: "Turn a news article into a vertical 9:16 TikTok where one fixed avatar presents the news to camera as an urgent scoop, with MiniMax-H3 native audio and word-synced burned-in subtitles."
+summary-cn: "把新闻文章变成竖屏 9:16 短视频：由固定虚拟主播面向镜头以“爆料”口吻播报，使用 MiniMax-H3 原生音频并烧录逐词字幕。"
+desc-en: "For creators running a recurring avatar news/sports/tech channel. Source a news article (URL or text), pick a sharp angle, write the spoken script in the article's language, then render clip-by-clip with MiniMax-H3 ref2va: the channel avatar is the identity reference, the model speaks the lines with native audio (no TTS, no lip-sync), the look and setting stay locked across every clip, and word-synced subtitles are burned in locally. Outputs a scroll-stopping presenter short: hook, context, core fact, escalation, open CTA. Not for faceless explainers, product ads, MVs, or fictional stories."
+desc-cn: "面向运营固定虚拟主播资讯/体育/科技频道的创作者。输入新闻文章（链接或文本），确定一个尖锐切入点，用文章语言撰写口播脚本，然后基于 MiniMax-H3 ref2va 逐条生成：频道虚拟主播作为身份参考，模型以原生音频说出台词（无 TTS、无对口型），全片保持人物与场景一致，并在本地烧录逐词字幕。输出停止滑动的口播短片：钩子、背景、核心事实、递进、开放式互动结尾。不适用于无人出镜讲解、产品广告、MV 或虚构故事。"
+author-en: "Charles / arlq"
+author-cn: "Charles / arlq"
+source: community

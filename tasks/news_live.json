@@ -1,0 +1,124 @@
+{
+  "created_at": "2026-09-17T09:00:00Z",
+  "task_id": "news_gyokeres_live",
+  "status": "pending",
+  "channel_name": "hudex-foot",
+  "agent_config": {
+    "skill": "tiktok-news-article-presentation",
+    "brief": {
+      "prompt": "Transforme cette page en TikTok verticale : le présentateur raconte le parcours du joueur face caméra, comme une histoire qu'il a envie de partager. Ajoute le lien de l'article dans la description, et termine la description par une question aux abonnés.",
+      "mood": "urgence, energie haute, complicite avec le spectateur"
+    },
+    "params": {
+      "source_url": "https://fr.wikipedia.org/wiki/Viktor_Gy%C3%B6keres"
+    },
+    "avatar": {
+      "name": "Nova",
+      "avatar_url": "s3://mavg-object-storage/avatars/nova.mp4",
+      "description": "presentatrice de la chaine foot",
+      "appearance": "woman in her early thirties, shoulder-length dark brown hair, light make-up, navy blazer over a white t-shirt, no glasses, no jewellery"
+    },
+    "models": {
+      "master_mind": {
+        "provider": "foundry",
+        "model_name": "claude-opus-4-7-1",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}"
+      },
+      "slm": {
+        "provider": "foundry",
+        "model_name": "claude-haiku-4-5",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}"
+      },
+      "video_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      },
+      "image_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      }
+    },
+    "llm": {
+      "max_tokens": 32000,
+      "thinking": true,
+      "effort": "high",
+      "max_iterations": 40
+    },
+    "render": {
+      "seed": 42,
+      "num_inference_steps": 9,
+      "flow_shift": 12.0,
+      "audio_flow_shift": 3.0,
+      "aspect_ratio": "9:16",
+      "short_edge": 768,
+      "concurrency": 4,
+      "timeout_s": 1800.0,
+      "poll_interval_s": 3.0,
+      "output_dir": "runs"
+    },
+    "plan": {
+      "min_total_seconds": 30,
+      "max_total_seconds": 60,
+      "min_shot_seconds": 6,
+      "max_shot_seconds": 10,
+      "words_per_second": 2.5,
+      "min_description_words": 90,
+      "arc": [
+        "hook",
+        "context",
+        "core",
+        "escalation",
+        "punch"
+      ]
+    },
+    "scraper": {
+      "provider": "linkup",
+      "base_url": "https://api.linkup.so/v1",
+      "token": "${LINKUP_API_KEY}",
+      "mode": "standard",
+      "render_js": false,
+      "extract_images": false,
+      "timeout_s": 60.0,
+      "max_chars": 20000
+    },
+    "publication": {
+      "min_title_chars": 10,
+      "max_title_chars": 100,
+      "min_chars": 80,
+      "max_chars": 2200,
+      "min_hashtags": 3,
+      "max_hashtags": 8,
+      "must_include": []
+    },
+    "language": "en",
+    "storage": {
+      "provider": "scaleway",
+      "endpoint_url": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "mavg-object-storage",
+      "access_key": "${SCW_ACCESS_KEY}",
+      "secret_key": "${SCW_SECRET_KEY}",
+      "cache_dir": "assets",
+      "timeout_s": 300.0
+    },
+    "subtitles": {
+      "enabled": true,
+      "model": "large-v3",
+      "device": "auto",
+      "compute_type": "auto",
+      "ffmpeg_bin": "",
+      "style": "karaoke",
+      "base_color": "FFFFFF",
+      "highlight_color": "F5E003",
+      "max_chars": 16,
+      "max_duration_s": 1.6,
+      "max_gap_s": 0.6
+    }
+  }
+}

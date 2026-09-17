@@ -1,0 +1,115 @@
+{
+  "created_at": "2026-09-17T09:00:00Z",
+  "task_id": "fruit_anime_mangue",
+  "status": "pending",
+  "channel_name": "hudex-kids",
+  "agent_config": {
+    "skill": "",
+    "brief": {
+      "prompt": "Fais une TikTok verticale tres courte ou le personnage presente le fruit a la camera, raconte d'ou il vient et une chose surprenante dessus, sur un ton joueur.",
+      "mood": "joyeux, colore, rythme rapide, adresse aux enfants"
+    },
+    "params": {
+      "fruit": "la mangue",
+      "angle_souhaite": "d'ou elle vient et pourquoi elle est si sucree"
+    },
+    "avatar": {
+      "name": "Tika",
+      "avatar_url": "https://cdn.exemple.fr/avatars/tika.png",
+      "description": "animatrice de la chaine jeunesse",
+      "appearance": "woman in her twenties, short bright pink hair, round yellow earrings, orange t-shirt, wide friendly smile"
+    },
+    "models": {
+      "master_mind": {
+        "provider": "foundry",
+        "model_name": "claude-opus-4-7-1",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}"
+      },
+      "slm": {
+        "provider": "foundry",
+        "model_name": "claude-haiku-4-5",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}"
+      },
+      "video_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      },
+      "image_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      }
+    },
+    "llm": {
+      "max_tokens": 32000,
+      "thinking": true,
+      "effort": "medium",
+      "max_iterations": 40
+    },
+    "render": {
+      "seed": 7,
+      "num_inference_steps": 9,
+      "flow_shift": 12.0,
+      "audio_flow_shift": 3.0,
+      "aspect_ratio": "9:16",
+      "short_edge": 768,
+      "concurrency": 2,
+      "timeout_s": 1800.0,
+      "poll_interval_s": 3.0,
+      "output_dir": "runs"
+    },
+    "plan": {
+      "min_total_seconds": 20,
+      "max_total_seconds": 35,
+      "min_shot_seconds": 5,
+      "max_shot_seconds": 9,
+      "words_per_second": 2.5,
+      "min_description_words": 90,
+      "arc": [
+        "hook",
+        "origine",
+        "surprise",
+        "cta"
+      ]
+    },
+    "scraper": {
+      "provider": "linkup",
+      "base_url": "https://api.linkup.so/v1",
+      "token": "${LINKUP_API_KEY}",
+      "mode": "standard",
+      "render_js": false,
+      "extract_images": false,
+      "timeout_s": 60.0,
+      "max_chars": 20000
+    },
+    "language": "fr",
+    "storage": {
+      "provider": "scaleway",
+      "endpoint_url": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "mavg-object-storage",
+      "access_key": "${SCW_ACCESS_KEY}",
+      "secret_key": "${SCW_SECRET_KEY}",
+      "cache_dir": "assets",
+      "timeout_s": 300.0
+    },
+    "subtitles": {
+      "enabled": true,
+      "model": "large-v3",
+      "device": "auto",
+      "compute_type": "auto",
+      "ffmpeg_bin": "",
+      "style": "plain",
+      "base_color": "FFFFFF",
+      "highlight_color": "F5E003",
+      "max_chars": 20,
+      "max_duration_s": 1.6,
+      "max_gap_s": 0.6
+    }
+  }
+}

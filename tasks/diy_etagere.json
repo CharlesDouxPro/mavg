@@ -1,0 +1,104 @@
+{
+  "created_at": "2026-09-17T09:00:00Z",
+  "task_id": "diy_etagere_caisses",
+  "status": "pending",
+  "channel_name": "hudex-diy",
+  "agent_config": {
+    "skill": "",
+    "brief": {
+      "prompt": "Fais une TikTok verticale DIY : l'animatrice explique face camera comment realiser l'objet, etape par etape, en montrant l'enthousiasme du resultat final.",
+      "mood": "chaleureux, artisanal, rythme posé mais jamais mou"
+    },
+    "params": {
+      "idee": "une etagere murale faite avec trois caisses de vin recuperees chez un caviste",
+      "budget": "moins de 15 euros",
+      "duree_realisation": "un apres-midi"
+    },
+    "avatar": {
+      "name": "Lena",
+      "avatar_url": "s3://mavg-object-storage/avatars/lena.mp4",
+      "description": "animatrice de la chaine DIY",
+      "appearance": "woman in her late twenties, curly auburn hair tied back, mustard-yellow work apron over a grey t-shirt, no glasses"
+    },
+    "models": {
+      "master_mind": {
+        "provider": "foundry",
+        "model_name": "claude-opus-4-7-1",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}"
+      },
+      "slm": {
+        "provider": "foundry",
+        "model_name": "claude-haiku-4-5",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}"
+      },
+      "video_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      },
+      "image_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      }
+    },
+    "llm": {
+      "effort": "medium"
+    },
+    "render": {
+      "seed": 1337,
+      "concurrency": 2
+    },
+    "plan": {
+      "min_total_seconds": 40,
+      "max_total_seconds": 75,
+      "min_shot_seconds": 7,
+      "max_shot_seconds": 12,
+      "arc": [
+        "hook",
+        "materiel",
+        "etapes",
+        "resultat",
+        "cta"
+      ]
+    },
+    "scraper": {
+      "provider": "linkup",
+      "base_url": "https://api.linkup.so/v1",
+      "token": "${LINKUP_API_KEY}",
+      "mode": "standard",
+      "render_js": false,
+      "extract_images": false,
+      "timeout_s": 60.0,
+      "max_chars": 20000
+    },
+    "language": "fr",
+    "storage": {
+      "provider": "scaleway",
+      "endpoint_url": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "mavg-object-storage",
+      "access_key": "${SCW_ACCESS_KEY}",
+      "secret_key": "${SCW_SECRET_KEY}",
+      "cache_dir": "assets",
+      "timeout_s": 300.0
+    },
+    "subtitles": {
+      "enabled": false,
+      "model": "large-v3",
+      "device": "auto",
+      "compute_type": "auto",
+      "ffmpeg_bin": "",
+      "style": "plain",
+      "base_color": "FFFFFF",
+      "highlight_color": "F5E003",
+      "max_chars": 16,
+      "max_duration_s": 1.6,
+      "max_gap_s": 0.6
+    }
+  }
+}
