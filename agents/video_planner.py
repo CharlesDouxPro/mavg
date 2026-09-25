@@ -13,6 +13,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -25,6 +26,7 @@ from pydantic import ValidationError
 
 from providers import scraper, storage
 from providers.editing import concat_clips, extract_frame, probe_duration
+from providers.subtitles import add_subtitles
 from providers.minimax_h3 import (
     MAX_SECONDS,
     MIN_SECONDS,
@@ -199,7 +201,8 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
 
     @tool
     def add_shot(
-        index: int, role: str, seconds: int, spoken_line: str, prompt: str
+        index: int, role: str, seconds: int, spoken_line: str, prompt: str,
+        camera_motion: Literal["stable", "punchy_zoom"] = "stable",
     ) -> str:
         """Ajoute (ou remplace) un plan du storyboard.
 
@@ -209,7 +212,12 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         spoken_line: la réplique, dans la langue du traitement.
         prompt: le prompt H3 full-reference, en anglais, sections `summary:`,
             `detailed_description:`, `overall_soundscape:`, `non_diegetic_music:`.
-            N'écris pas `subject_definitions:` ni `retention_analysis:`.
+            N'écris pas `subject_definitions:` ni `retention_analysis:`. Le moteur
+            n'a PAS de prompt négatif : dis ce que tu veux voir, pas ce à éviter.
+        camera_motion: "stable" (défaut) = plan fixe, aucun zoom — obligatoire
+            dès que l'avatar parle (context, explication, core). "punchy_zoom" =
+            zoom vif et bref, réservé aux plans qui doivent accrocher l'œil
+            (hook, punch), à décrire aussi dans le mouvement de caméra du prompt.
         """
         try:
             shot = MinimaxShot(
@@ -218,12 +226,13 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
                 seconds=seconds,
                 spoken_line=spoken_line,
                 prompt=prompt,
+                camera_motion=camera_motion,
             )
         except ValidationError as exc:
             print(f"  [tool] add_shot({index}) REFUSE")
             return f"Plan refusé par le schéma MiniMax :\n{exc}"
         print(
-            f"  [tool] add_shot({index}, {role}, {seconds}s, "
+            f"  [tool] add_shot({index}, {role}, {seconds}s, {camera_motion}, "
             f"{len(prompt.split())} mots de prompt)"
         )
         draft.shots[index] = shot
@@ -496,6 +505,13 @@ Chaque prompt doit être riche et explicite : composition, position du sujet,
 environnement et lumière, actions et changements d'état, mouvement de caméra,
 son, et la réplique exacte. Un résumé d'intention ne suffit pas.
 
+Caméra : par défaut le plan est STABLE (camera_motion="stable"), caméra fixe,
+aucun zoom — c'est la règle dès que l'avatar parle (contexte, explication,
+core). Ne réserve camera_motion="punchy_zoom" qu'aux plans qui doivent
+accrocher l'œil (hook, punch), et décris alors ce zoom vif dans le mouvement de
+caméra du prompt. Le moteur n'a pas de prompt négatif : formule tout en positif
+(ce que la caméra fait, pas ce qu'elle évite).
+
 Contraintes de ce tournage :
 {constraints}
 
@@ -517,10 +533,10 @@ def describe_constraints(
             f"- detailed_description : au moins {limits.min_description_words} mots.",
             f"- Arc narratif : {' → '.join(limits.arc)}." if limits.arc else "",
             "- Ne décris jamais l'apparence du sujet : elle est verrouillée en amont.",
-            f"- Titre de la vidéo : {published.min_title_chars}-"
-            f"{published.max_title_chars} caractères.",
-            f"- Description de publication : {published.min_chars}-{published.max_chars} "
-            f"caractères, {published.min_hashtags}-{published.max_hashtags} hashtags.",
+            (f"- Titre de la vidéo : {published.min_title_chars}-"
+            f"{published.max_title_chars} caractères."),
+            (f"- Description de publication : {published.min_chars}-{published.max_chars} "
+            f"caractères, {published.min_hashtags}-{published.max_hashtags} hashtags."),
             f"- Langue : {language_instruction}" if language_instruction else "",
         ]
     ).strip()
@@ -633,7 +649,7 @@ def subtitle_video(task: TaskConfig, video: Path) -> Path:
     print(f"\n{'=' * 70}\nSous-titres ({settings.model}, {settings.device}, {settings.style})")
     print("=" * 70)
     try:
-        final, n_words = add_subtitles(video, settings, task.agent_config.language)
+        final, n_words =  (video, settings, task.agent_config.language)
     except RuntimeError as exc:
         print(f"!! Sous-titres impossibles : {exc}")
         print(f"   Le montage reste livrable : {video}")

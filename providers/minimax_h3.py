@@ -22,13 +22,16 @@ les bornes 5-15 s. Tout ce qui se règle sans redéploiement vit dans
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field
 
 from task_config import Avatar, ModelConfig, RenderSettings
 
-# Contraintes du moteur : les changer casse l'appel.
+# Contraintes du moteur : les changer casse l'appel. Le serveur EXIGE `task` à
+# chaque requête (tâches supportées : fl2va, ref2va, t2va) ; ce déploiement ne
+# sert que ref2va — l'image de référence conditionne l'identité.
 TASK = "ref2va"
 MIN_SECONDS = 5
 MAX_SECONDS = 15
@@ -59,6 +62,16 @@ class MinimaxShot(BaseModel):
         "`detailed_description:`, `overall_soundscape:`, `non_diegetic_music:`. "
         "Ne rédige PAS `subject_definitions:` ni `retention_analysis:` : le verrou "
         "d'identité est préfixé au rendu."
+    )
+    camera_motion: Literal["stable", "punchy_zoom"] = Field(
+        default="stable",
+        description="Mouvement de caméra du plan. 'stable' = plan fixe, aucun "
+        "zoom : c'est OBLIGATOIRE dès que l'avatar parle (context, explication, "
+        "core), et c'est la valeur par défaut. 'punchy_zoom' = un zoom vif et "
+        "bref, réservé aux plans qui doivent accrocher l'œil (hook, punch). En "
+        "'stable', une consigne de caméra fixe est préfixée au prompt (le moteur "
+        "n'a pas de prompt négatif) ; en 'punchy_zoom', décris le zoom dans le "
+        "mouvement de caméra du prompt.",
     )
 
 
@@ -115,16 +128,39 @@ def identity_lock(avatar: Avatar) -> str:
     )
 
 
-def reference_uri(reference: Path) -> str:
-    """Le chemin de la frame de référence, tel que le serveur l'accepte.
+def reference_path(reference: Path) -> str:
+    """Le CHEMIN LOCAL absolu de la frame, pour `conditions[].uri`.
 
-    `file://` en absolu : le serveur résout les conditions localement, il doit
-    donc tourner sur la même machine que ce process (ou monter le même dossier).
+    Le loader de matériel H3 lit l'`uri` directement sur le disque : ce process
+    doit donc tourner sur la même machine que le serveur (ou monter le même
+    dossier). On renvoie un chemin nu plutôt qu'un `file://` : le loader accepte
+    les deux, mais le chemin nu évite l'encodage des espaces et accents du nom.
     """
     reference = Path(reference)
     if not reference.is_file():
         raise FileNotFoundError(f"Frame de référence introuvable : {reference}")
-    return reference.resolve().as_uri()
+    return str(reference.resolve())
+
+
+# Consigne de caméra fixe, préfixée au prompt d'un plan `stable`. Le checkpoint
+# est distillé CFG (une seule branche positive, pas de prompt négatif) : la
+# stabilité doit donc être formulée EN POSITIF, comme le verrou d'identité.
+STABLE_CAMERA_LOCK = (
+    "camera_direction:\n"
+    "The camera is static and locked off on a tripod for the entire shot: no "
+    "zoom in or out, no push-in, no dolly, no pan, no tilt, no handheld drift. "
+    "The framing stays completely fixed while the subject speaks.\n\n"
+)
+
+
+def camera_lock(camera_motion: str) -> str:
+    """Le bloc de caméra préfixé au prompt, selon `camera_motion`.
+
+    Sur un plan `stable`, on impose une caméra fixe : l'avatar parle, le plan ne
+    doit pas bouger. Sur `punchy_zoom`, rien n'est préfixé — le zoom vif est
+    décrit par l'agent dans le prompt du plan.
+    """
+    return STABLE_CAMERA_LOCK if camera_motion == "stable" else ""
 
 
 def build_payload(
@@ -135,21 +171,29 @@ def build_payload(
     render: RenderSettings,
     reference: Path,
 ) -> dict:
-    """Traduit un plan en payload `POST /v1/videos` pour le serveur SGLang.
+    """Traduit un plan en payload JSON `POST /v1/videos` pour le serveur SGLang.
 
-    Le verrou d'identité est calculé ici, pas passé en argument : un plan rendu
-    sans verrou n'est pas exprimable. `reference` est la frame tirée de la vidéo
-    d'avatar ; `ref2va` ne conditionne que sur une image.
+    Champs alignés sur le validateur canonique MiniMax H3 (`request_validation.py`).
+    Le serveur EXIGE `task`, `prompt`, `conditions` (≥1 entrée pour ref2va) et
+    `target` ; il REFUSE `negative_prompt` (checkpoint distillé CFG, une seule
+    branche positive). `target.short_edge` DOIT valoir 768.
+
+    La référence d'identité passe par `conditions`, en `uri` = CHEMIN LOCAL nu
+    (le loader H3 sait lire un chemin local ou `file://`, mais pas `s3://` ; le
+    chemin nu évite l'encodage des espaces/accents du nom de fichier). `ref2va`
+    ne conditionne que sur une image. Le prompt est préfixé par le verrou
+    d'identité PUIS le verrou de caméra — la stabilité passe par le positif,
+    faute de prompt négatif.
     """
     duration = float(max(MIN_SECONDS, min(MAX_SECONDS, shot.seconds)))
     return {
         "model": model_name,
-        "prompt": identity_lock(avatar) + shot.prompt,
-        "seconds": int(round(duration)),
         "task": TASK,
+        "prompt": identity_lock(avatar) + camera_lock(shot.camera_motion) + shot.prompt,
         "conditions": [
-            {"type": "image", "uri": reference_uri(reference), "role": "reference"}
+            {"type": "image", "uri": reference_path(reference), "role": "reference"}
         ],
+        "seconds": int(round(duration)),
         "target": {
             "short_edge": render.short_edge,
             "aspect_ratio": render.aspect_ratio,
@@ -198,7 +242,13 @@ async def generate_videos(
                 reference=reference,
             )
             resp = await client.post("/videos", json=payload)
-            resp.raise_for_status()
+            if resp.is_error:
+                # raise_for_status masque le corps ; c'est là qu'est le motif
+                # (« task is required », « negative_prompt is not supported »…).
+                raise RuntimeError(
+                    f"SGLang a refusé le plan {shot.index} "
+                    f"(HTTP {resp.status_code}) : {resp.text[:500]}"
+                )
             job_id = resp.json().get("id")
             if not job_id:
                 raise RuntimeError(f"SGLang : réponse sans id ({resp.text[:200]})")
