@@ -226,3 +226,20 @@ def upload(config: StorageConfig, path: Path | str, key: str) -> str:
         raise RuntimeError(f"Stockage injoignable ({config.endpoint_url}) : {exc}") from exc
 
     return f"s3://{config.bucket}/{key}"
+
+
+def presigned_url(config: StorageConfig, uri: str, filename: str, expires_s: int) -> str:
+    """Un lien de téléchargement signé vers un objet du bucket privé."""
+    located = parse_uri(config, uri)
+    if located is None:
+        raise ValueError(f"{uri!r} ne désigne aucun objet du stockage.")
+    bucket, key = located
+    return _client(config).generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": bucket,
+            "Key": key,
+            "ResponseContentDisposition": f'attachment; filename="{filename}"',
+        },
+        ExpiresIn=expires_s,
+    )

@@ -24,3 +24,18 @@ class MongoDB:
             return last_task
         else:
             return
+
+    def set_status(self, collection_name, task_id, status, error=None):
+        self.db[collection_name].update_one(
+            filter={"task_id": task_id},
+            update={"$set": {"status": status, "error": error}},
+        )
+
+    def fail_working_tasks(self, collection_name, error):
+        collection = self.db[collection_name]
+        task_ids = [doc.get("task_id") for doc in collection.find({"status": "working"}, {"task_id": 1})]
+        collection.update_many(
+            filter={"status": "working"},
+            update={"$set": {"status": "failed", "error": error}},
+        )
+        return task_ids

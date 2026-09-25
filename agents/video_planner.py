@@ -649,7 +649,7 @@ def subtitle_video(task: TaskConfig, video: Path) -> Path:
     print(f"\n{'=' * 70}\nSous-titres ({settings.model}, {settings.device}, {settings.style})")
     print("=" * 70)
     try:
-        final, n_words =  (video, settings, task.agent_config.language)
+        final, n_words = add_subtitles(video, settings, task.agent_config.language)
     except RuntimeError as exc:
         print(f"!! Sous-titres impossibles : {exc}")
         print(f"   Le montage reste livrable : {video}")
@@ -684,11 +684,11 @@ def publish_video(task: TaskConfig, plan: VideoPlan, final: Path) -> str:
     semer une copie dans le dossier du jour.
     """
     config = task.agent_config
-    channel = slugify(task.channel_name)
+    channel = slugify(task.channel_config.channel_name)
     title = slugify(plan.publication.title)
     if not channel:
         raise ValueError(
-            f"Nom de chaîne inutilisable comme dossier : {task.channel_name!r}."
+            f"Nom de chaîne inutilisable comme dossier : {task.channel_config.channel_name!r}."
         )
 
     prefix = f"{channel}/{task.created_at.date().isoformat()}/{title}"
@@ -729,7 +729,7 @@ def main() -> None:
     plan, draft, n_messages = plan_video(task)
 
     print(f"\n{'=' * 70}")
-    print(f"{task.channel_name} / {task.task_id}")
+    print(f"{task.channel_config.channel_name} / {task.task_id}")
     print(f"{n_messages} messages | skills chargés : {draft.loaded}")
     print("=" * 70)
     print(f"Angle  : {plan.angle}")

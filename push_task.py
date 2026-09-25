@@ -55,7 +55,7 @@ def push(files: list[Path], dry_run: bool, collection: str = COLLECTION) -> None
         document = prepare(path, suffix)
         config = document["agent_config"]
         summary = (
-            f"{document['task_id']:34s} {document['channel_name']:12s} "
+            f"{document['task_id']:34s} {document['channel_config']['channel_name']:12s} "
             f"langue={config.get('language') or '(libre)'} "
             f"sous-titres={config.get('subtitles', {}).get('enabled', True)}"
         )

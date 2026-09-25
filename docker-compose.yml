@@ -1,0 +1,73 @@
+# Deux services sur la même machine : l'inférence (MiniMax-H3 sur les GPU) et l'agent (main).
+#
+# Ce fichier est le même en local et sur Scaleway. Ce qui change d'une machine à l'autre,
+# c'est-à-dire où sont les poids sur l'hôte, vit dans un profil de déploiement :
+#   docker compose --env-file docker/onprem.env   up -d --build
+#   docker compose --env-file docker/scaleway.env up -d --build
+#
+# L'agent tourne en lot : il vide la file Mongo, envoie les rapports, puis s'arrête.
+# Pour que l'inférence s'arrête avec lui (l'instance cloud) :
+#   docker compose --env-file docker/scaleway.env up --exit-code-from agent
+# En local, l'inférence reste chargée ; relancer un lot : `docker compose ... up agent`.
+
+name: mavg
+
+services:
+  inference:
+    build: docker/inference
+    # Tag poussé par `docker/push.sh inference` ; `dev` pour un build local.
+    image: rg.fr-par.scw.cloud/mavg-container-registery/mavg-inference:${INFERENCE_TAG:-dev}
+    restart: unless-stopped
+    ipc: host # NCCL entre les GPU a besoin de la mémoire partagée de l'hôte
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      HF_HUB_OFFLINE: "1" # jamais de téléchargement : des poids absents font échouer le démarrage
+      H3_MODEL_PATH: ${H3_MODEL_PATH:?}
+      H3_LORA_FILE: ${H3_LORA_FILE:?}
+      H3_NUM_GPUS: ${H3_NUM_GPUS:-2}
+      H3_TP_SIZE: ${H3_TP_SIZE:-2}
+    volumes:
+      - ${WEIGHTS_DIR:?lance compose avec --env-file docker/onprem.env ou docker/scaleway.env}:/weights:ro
+      - ${LORA_DIR:?}:/loras:ro
+      # L'agent passe la frame de référence par son chemin : le serveur doit la voir au même endroit.
+      - assets:/app/assets:ro
+      # Kernels JIT et caches torch, gardés quand le conteneur est recréé.
+      - inference-cache:/root/.cache
+    ports:
+      - "127.0.0.1:30010:30010" # joignable depuis l'hôte seulement, pour curl ; l'agent passe par le réseau interne
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:30010/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20m # ~135 Go à charger, bien plus lent depuis un block storage réseau
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent/Dockerfile
+    # Tag poussé par `docker/push.sh` (le SHA du commit) ; `dev` pour un build local.
+    image: rg.fr-par.scw.cloud/mavg-container-registery/mavg-agent:${AGENT_TAG:-dev}
+    restart: "no" # un lot fini ne doit pas être relancé
+    depends_on:
+      inference:
+        condition: service_healthy
+    env_file: .env.local # secrets Mongo, Scaleway, Foundry, Linkup, SMTP : jamais dans l'image
+    environment:
+      MINIMAX_BASE_URL: http://inference:30010/v1 # prime sur la valeur de .env.local
+      EXIT_WHEN_EMPTY: "1" # s'arrêter une fois la file vidée et les rapports envoyés
+    volumes:
+      - assets:/app/assets
+      - ./runs:/app/runs # clips et montages, lisibles depuis l'hôte
+      - whisper-cache:/root/.cache/huggingface # poids faster-whisper, téléchargés une seule fois
+
+volumes:
+  assets:
+  inference-cache:
+  whisper-cache:

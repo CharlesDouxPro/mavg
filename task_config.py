@@ -93,8 +93,10 @@ class RenderSettings(BaseModel):
     audio_flow_shift: float = 3.0
     aspect_ratio: str = "9:16"
     short_edge: int = 768
-    concurrency: int = 4
-    """Clips en vol simultanément. Le serveur sérialise le GPU de toute façon."""
+    concurrency: int = 2
+    """Clips en vol simultanément. Le serveur rend un clip à la fois : 2 suffit
+    pour qu'un clip attende en file pendant que l'autre se rend (pas de temps
+    mort GPU). Au-delà, les clips ne font qu'attendre et consomment `timeout_s`."""
     timeout_s: float = 1800.0
     poll_interval_s: float = 3.0
     output_dir: str = "runs"
@@ -103,9 +105,21 @@ class RenderSettings(BaseModel):
 
 
 DEFAULT_FORBIDDEN_APPEARANCE = [
-    "hair", "beard", "shirt", "jacket", "glasses", "hoodie", "wears", "wearing",
-    "his face", "her face", "moustache", "young man", "young woman",
-    "young male", "young female",
+    "hair",
+    "beard",
+    "shirt",
+    "jacket",
+    "glasses",
+    "hoodie",
+    "wears",
+    "wearing",
+    "his face",
+    "her face",
+    "moustache",
+    "young man",
+    "young woman",
+    "young male",
+    "young female",
 ]
 
 
@@ -247,10 +261,22 @@ def _preview(value: Any) -> str:
 
 
 LANGUAGE_NAMES = {
-    "fr": "French", "en": "English", "es": "Spanish", "de": "German",
-    "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "pl": "Polish",
-    "ru": "Russian", "tr": "Turkish", "sv": "Swedish", "ar": "Arabic",
-    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "hi": "Hindi",
+    "fr": "French",
+    "en": "English",
+    "es": "Spanish",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "ru": "Russian",
+    "tr": "Turkish",
+    "sv": "Swedish",
+    "ar": "Arabic",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "hi": "Hindi",
 }
 """Code ISO -> nom anglais de la langue, tel que MiniMax-H3 l'attend dans les
 balises `<d>[Language] ... </d>`. Les sections du prompt restent en anglais ;
@@ -274,9 +300,7 @@ class AgentConfig(BaseModel):
     plan: PlanConstraints = Field(default_factory=PlanConstraints)
     scraper: ScraperConfig = Field(default_factory=ScraperConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
-    publication: PublicationConstraints = Field(
-        default_factory=PublicationConstraints
-    )
+    publication: PublicationConstraints = Field(default_factory=PublicationConstraints)
     subtitles: SubtitleSettings = Field(default_factory=SubtitleSettings)
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -319,11 +343,16 @@ class AgentConfig(BaseModel):
         return line
 
 
+class ChannelConfig(BaseModel):
+    channel_name: str
+    email: str
+
+
 class TaskConfig(BaseModel):
     created_at: datetime
     task_id: str
     status: Literal["pending", "working", "failed", "done"]
-    channel_name: str
+    channel_config: ChannelConfig
     agent_config: AgentConfig
 
 
@@ -347,5 +376,9 @@ def load_task(source: Path | str | dict) -> "TaskConfig":
 
     Accepte un document Mongo tel quel : les champs en trop (`_id`) sont ignorés.
     """
-    raw = source if isinstance(source, dict) else json.loads(Path(source).read_text("utf-8"))
+    raw = (
+        source
+        if isinstance(source, dict)
+        else json.loads(Path(source).read_text("utf-8"))
+    )
     return TaskConfig.model_validate(expand_env(raw))

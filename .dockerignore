@@ -1,0 +1,19 @@
+# Contexte de build de l'agent (la racine du repo).
+.git
+.venv
+.vscode
+.mypy_cache
+.ruff_cache
+__pycache__
+*.py[oc]
+
+# Secrets : passés au conteneur par `env_file`, jamais copiés dans l'image.
+.env
+.env.*
+
+# Données de run : montées en volume, pas dans l'image.
+runs/
+assets/
+
+# Le serveur d'inférence a son propre contexte de build.
+docker/
