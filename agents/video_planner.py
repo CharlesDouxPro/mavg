@@ -603,14 +603,28 @@ def prepare_avatar(task: TaskConfig) -> Path:
     return frame
 
 
+def prepare_voice(task: TaskConfig) -> Path | None:
+    """Ramène la voix de l'avatar depuis le catalogue du bucket, ou None s'il n'en a pas.
+
+    Comme la frame, elle part au rendu par son chemin local : le même fichier sur
+    chaque plan, c'est ce qui garde la même voix d'un clip à l'autre.
+    """
+    config = task.agent_config
+    if not config.avatar.voice_url:
+        return None
+    return storage.download(config.storage, config.avatar.voice_url)
+
+
 def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
     """Rend chaque plan sur le moteur vidéo du channel."""
     config = task.agent_config
     out = Path(config.render.output_dir) / task.task_id
     reference = prepare_avatar(task)
-    lock = identity_lock(config.avatar)
+    voice = prepare_voice(task)
+    lock = identity_lock(config.avatar, voiced=voice is not None)
     print(f"\n{'=' * 70}\nRendu de {len(plan.shots)} plans sur {config.models.video_generator.model_name}")
     print(f"Référence d'identité : {reference}")
+    print(f"Voix de référence : {voice or 'aucune (le modèle invente une voix par plan)'}")
     print(f"Verrou d'identité : {len(lock)} caractères préfixés à chaque plan")
     print("=" * 70)
     return asyncio.run(
@@ -618,6 +632,7 @@ def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
             plan.shots,
             avatar=config.avatar,
             reference=reference,
+            voice=voice,
             model=config.models.video_generator,
             render=config.render,
             output_dir=out,
@@ -756,6 +771,7 @@ def main() -> None:
             avatar=task.agent_config.avatar,
             render=task.agent_config.render,
             reference=prepare_avatar(task),
+            voice=prepare_voice(task),
         )
         print(f"\n{'=' * 70}\nPayload du plan 1 (--render pour lancer le rendu)")
         print("=" * 70)

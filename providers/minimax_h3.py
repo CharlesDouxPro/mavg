@@ -104,32 +104,52 @@ class VideoPlan(BaseModel):
     publication: Publication
 
 
-def identity_lock(avatar: Avatar) -> str:
-    """Bloc `subject_definitions` + `retention_analysis` figeant l'apparence.
+# Liaison de la référence audio, au format H3 (`h3_ref_format.txt`) : sans elle, le
+# moteur ne sait pas si `<Audio 1>` est une voix, une musique ou une piste à recopier.
+VOICE_DEFINITION = "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)."
+VOICE_RETENTION = (
+    "<Audio 1>: reference - <Subject 1> (S1) speaks every line with <Audio 1>'s voice "
+    "timbre, accent and delivery, identically in every shot, without copying the "
+    "original signal."
+)
+
+
+def identity_lock(avatar: Avatar, voiced: bool = False) -> str:
+    """Bloc `subject_definitions` + `retention_analysis` figeant l'apparence et la voix.
 
     Préfixé à l'identique sur CHAQUE plan : c'est ce qui empêche la coupe, la
     tenue ou les accessoires de dériver d'un clip à l'autre. Les plans écrits
     par l'agent n'ont donc pas à décrire le personnage, et ne doivent pas le
     faire — ils décrivent l'action autour d'une apparence déjà verrouillée.
+    `voiced` : une référence audio accompagne le plan, on la lie à la voix du sujet.
     """
     look = (avatar.appearance or avatar.description or "").strip()
-    if not look:
+    definitions, retention = [], []
+    if look:
+        definitions.append(
+            "<Subject 1> is the on-camera subject from the reference image. Fixed, "
+            f"invariant appearance (matches the reference exactly): {look}"
+        )
+        retention.append(
+            "<Subject 1>'s appearance is FULLY PRESERVED and UNCHANGED in every shot - "
+            "face, age, hair, facial hair, skin tone, wardrobe and any worn accessories "
+            "match the reference and the definition above exactly. Do NOT re-age, "
+            "restyle, change the outfit, or add/remove props (glasses, hat, headphones, "
+            "microphone) unless the shot description below explicitly requires it."
+        )
+    if voiced:
+        definitions.append(VOICE_DEFINITION)
+        retention.append(VOICE_RETENTION)
+    if not definitions:
         return ""
     return (
-        "subject_definitions:\n"
-        "<Subject 1> is the on-camera subject from the reference image. Fixed, "
-        f"invariant appearance (matches the reference exactly): {look}\n\n"
-        "retention_analysis:\n"
-        "<Subject 1>'s appearance is FULLY PRESERVED and UNCHANGED in every shot - "
-        "face, age, hair, facial hair, skin tone, wardrobe and any worn accessories "
-        "match the reference and the definition above exactly. Do NOT re-age, "
-        "restyle, change the outfit, or add/remove props (glasses, hat, headphones, "
-        "microphone) unless the shot description below explicitly requires it.\n\n"
+        "subject_definitions:\n" + "\n".join(definitions) + "\n\n"
+        "retention_analysis:\n" + "\n".join(retention) + "\n\n"
     )
 
 
-def reference_path(reference: Path) -> str:
-    """Le CHEMIN LOCAL absolu de la frame, pour `conditions[].uri`.
+def reference_path(reference: Path, what: str = "Frame de référence") -> str:
+    """Le CHEMIN LOCAL absolu d'une référence (frame, voix), pour `conditions[].uri`.
 
     Le loader de matériel H3 lit l'`uri` directement sur le disque : ce process
     doit donc tourner sur la même machine que le serveur (ou monter le même
@@ -138,7 +158,7 @@ def reference_path(reference: Path) -> str:
     """
     reference = Path(reference)
     if not reference.is_file():
-        raise FileNotFoundError(f"Frame de référence introuvable : {reference}")
+        raise FileNotFoundError(f"{what} introuvable : {reference}")
     return str(reference.resolve())
 
 
@@ -170,6 +190,7 @@ def build_payload(
     avatar: Avatar,
     render: RenderSettings,
     reference: Path,
+    voice: Path | None = None,
 ) -> dict:
     """Traduit un plan en payload JSON `POST /v1/videos` pour le serveur SGLang.
 
@@ -178,21 +199,25 @@ def build_payload(
     `target` ; il REFUSE `negative_prompt` (checkpoint distillé CFG, une seule
     branche positive). `target.short_edge` DOIT valoir 768.
 
-    La référence d'identité passe par `conditions`, en `uri` = CHEMIN LOCAL nu
-    (le loader H3 sait lire un chemin local ou `file://`, mais pas `s3://` ; le
-    chemin nu évite l'encodage des espaces/accents du nom de fichier). `ref2va`
-    ne conditionne que sur une image. Le prompt est préfixé par le verrou
-    d'identité PUIS le verrou de caméra — la stabilité passe par le positif,
-    faute de prompt négatif.
+    Les références passent par `conditions`, en `uri` = CHEMIN LOCAL nu (le
+    loader H3 sait lire un chemin local ou `file://`, mais pas `s3://` ; le chemin
+    nu évite l'encodage des espaces/accents du nom de fichier) : la frame porte
+    l'identité visuelle, `voice` (optionnelle) la voix, la même à chaque plan. Le
+    prompt est préfixé par le verrou d'identité PUIS le verrou de caméra — la
+    stabilité passe par le positif, faute de prompt négatif.
     """
     duration = float(max(MIN_SECONDS, min(MAX_SECONDS, shot.seconds)))
+    conditions = [{"type": "image", "uri": reference_path(reference), "role": "reference"}]
+    if voice is not None:
+        conditions.append(
+            {"type": "audio", "uri": reference_path(voice, "Voix de référence"), "role": "reference"}
+        )
+    lock = identity_lock(avatar, voiced=voice is not None)
     return {
         "model": model_name,
         "task": TASK,
-        "prompt": identity_lock(avatar) + camera_lock(shot.camera_motion) + shot.prompt,
-        "conditions": [
-            {"type": "image", "uri": reference_path(reference), "role": "reference"}
-        ],
+        "prompt": lock + camera_lock(shot.camera_motion) + shot.prompt,
+        "conditions": conditions,
         "seconds": int(round(duration)),
         "target": {
             "short_edge": render.short_edge,
@@ -212,6 +237,7 @@ async def generate_videos(
     *,
     avatar: Avatar,
     reference: Path,
+    voice: Path | None = None,
     model: ModelConfig,
     render: RenderSettings,
     output_dir: Path | str,
@@ -240,6 +266,7 @@ async def generate_videos(
                 avatar=avatar,
                 render=render,
                 reference=reference,
+                voice=voice,
             )
             resp = await client.post("/videos", json=payload)
             if resp.is_error:

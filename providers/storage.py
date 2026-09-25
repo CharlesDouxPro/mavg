@@ -228,6 +228,19 @@ def upload(config: StorageConfig, path: Path | str, key: str) -> str:
     return f"s3://{config.bucket}/{key}"
 
 
+def list_keys(config: StorageConfig, prefix: str) -> set[str]:
+    """Les clés du bucket sous `prefix`, toutes pages confondues."""
+    if config.provider != "scaleway":
+        raise ValueError(f"Fournisseur de stockage inconnu : {config.provider!r}.")
+    try:
+        pages = _client(config).get_paginator("list_objects_v2").paginate(
+            Bucket=config.bucket, Prefix=prefix
+        )
+        return {obj["Key"] for page in pages for obj in page.get("Contents", [])}
+    except BotoCoreError as exc:
+        raise RuntimeError(f"Stockage injoignable ({config.endpoint_url}) : {exc}") from exc
+
+
 def presigned_url(config: StorageConfig, uri: str, filename: str, expires_s: int) -> str:
     """Un lien de téléchargement signé vers un objet du bucket privé."""
     located = parse_uri(config, uri)

@@ -62,9 +62,7 @@ class Avatar(BaseModel):
     description: str
     appearance: str
     reference_frame_s: float | None = None
-    """Instant, en secondes, de la frame tirée de la vidéo pour servir de
-    référence d'identité. Vide : le milieu de la vidéo — le début est souvent un
-    fondu ou une pose de démarrage."""
+    voice_url: str = ""
 
 
 class Brief(BaseModel):
