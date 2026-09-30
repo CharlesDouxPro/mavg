@@ -33,7 +33,10 @@ services:
       H3_NUM_GPUS: ${H3_NUM_GPUS:-2}
       H3_TP_SIZE: ${H3_TP_SIZE:-2}
     volumes:
-      - ${WEIGHTS_DIR:?lance compose avec --env-file docker/onprem.env ou docker/scaleway.env}:/weights:ro
+      # Le point de montage garde le nom du modèle : sglang reconnaît MiniMax-H3 à son chemin
+      # (`…/MiniMax-H3` ou `…/models--MiniMaxAI--MiniMax-H3/…`). Sans lui, il lit
+      # model_index.json, ne connaît pas `MiniMaxH3ModularPipeline` et échoue via diffusers.
+      - ${WEIGHTS_DIR:?lance compose avec --env-file docker/onprem.env ou docker/scaleway.env}:${WEIGHTS_MOUNT:-/weights}:ro
       - ${LORA_DIR:?}:/loras:ro
       # L'agent passe la frame de référence par son chemin : le serveur doit la voir au même endroit.
       - assets:/app/assets:ro
