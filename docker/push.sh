@@ -20,12 +20,15 @@ case "$TARGET" in
   agent)
     DOCKERFILE=docker/agent/Dockerfile
     CONTEXT=.
+    # Les secrets de .env.local sont embarqués dans l'image : registre privé uniquement.
+    BUILD_ARGS=(--secret id=env,src=.env.local)
     # Ce qui entre dans l'image : tout le repo, sauf ce que .dockerignore écarte.
     WATCHED=(. ':!docker' ':!.vscode')
     ;;
   inference)
     DOCKERFILE=docker/inference/Dockerfile
     CONTEXT=docker/inference
+    BUILD_ARGS=()
     WATCHED=(docker/inference)
     ;;
   *)
@@ -38,6 +41,11 @@ if [[ -n "$(git status --porcelain -- "${WATCHED[@]}")" ]]; then
   echo "Fichiers modifiés ou non suivis dans ce qui entre dans l'image $TARGET :" >&2
   git status --short -- "${WATCHED[@]}" >&2
   echo "Commite-les d'abord : sinon le tag ne décrirait pas le contenu de l'image." >&2
+  exit 1
+fi
+
+if [[ "$TARGET" == agent && ! -f .env.local ]]; then
+  echo "Pas de .env.local : l'image de l'agent embarque ses secrets depuis ce fichier." >&2
   exit 1
 fi
 
@@ -58,6 +66,6 @@ if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
   exit 0
 fi
 
-docker build -f "$DOCKERFILE" -t "$IMAGE" "$CONTEXT"
+docker build "${BUILD_ARGS[@]}" -f "$DOCKERFILE" -t "$IMAGE" "$CONTEXT"
 docker push "$IMAGE"
 echo "Poussée : $IMAGE"

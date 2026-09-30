@@ -58,7 +58,10 @@ services:
     depends_on:
       inference:
         condition: service_healthy
-    env_file: .env.local # secrets Mongo, Scaleway, Foundry, Linkup, SMTP : jamais dans l'image
+    # Les secrets sont embarqués dans l'image (registre privé) ; .env.local, s'il existe, prime.
+    env_file:
+      - path: .env.local
+        required: false
     environment:
       MINIMAX_BASE_URL: http://inference:30010/v1 # prime sur la valeur de .env.local
       EXIT_WHEN_EMPTY: "1" # s'arrêter une fois la file vidée et les rapports envoyés

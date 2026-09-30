@@ -17,6 +17,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 COPY . .
+# Les secrets (Mongo, bucket, Foundry, Linkup, SMTP…) sont embarqués : l'image suffit à
+# tourner, sans .env.local sur la machine. Elle ne doit donc vivre que dans le registre PRIVÉ.
+# Fournis par `docker/push.sh` (--secret id=env,src=.env.local) ; une variable d'environnement
+# du conteneur prime (main.py charge .env.local sans écraser l'existant).
+RUN --mount=type=secret,id=env,required=true \
+    install -m 0400 /run/secrets/env /app/.env.local
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1
