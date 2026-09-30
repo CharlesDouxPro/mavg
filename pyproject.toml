@@ -22,3 +22,13 @@ dependencies = [
 
 [tool.mypy]
 disable_error_code = ["var-annotated"]
+
+[dependency-groups]
+dev = [
+    "mongomock>=4.3.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

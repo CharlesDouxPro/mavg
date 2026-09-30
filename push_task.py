@@ -1,8 +1,7 @@
 """Pousse des TaskConfig en base, pour donner du travail au worker.
 
-Le worker (`main.py`) prend la tâche `pending` la PLUS RÉCENTE. Pousser plusieurs
-tâches les fait donc traiter en pile, de la dernière à la première : l'ordre des
-arguments n'est pas l'ordre d'exécution.
+Le worker (`main.py`) prend la tâche `pending` la PLUS ANCIENNE (file FIFO) : les
+tâches sont traitées dans l'ordre où elles ont été poussées.
 
 Chaque fichier est validé avant l'insertion. Une config qui ne passe pas le
 schéma échoue ici, pas trois minutes plus tard dans la boucle agentique.
@@ -69,7 +68,7 @@ def push(files: list[Path], dry_run: bool, collection: str = COLLECTION) -> None
 def show_pending(collection: str = COLLECTION) -> None:
     client = connect()
     documents = list(
-        client.db[collection].find({"status": "pending"}).sort("created_at", -1)
+        client.db[collection].find({"status": "pending"}).sort("created_at", 1)
     )
     if not documents:
         print("Aucune tâche en attente.")

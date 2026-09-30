@@ -691,22 +691,26 @@ def publication_text(published: Publication) -> str:
     ) + "\n"
 
 
-def publish_video(task: TaskConfig, plan: VideoPlan, final: Path) -> str:
-    """Range la vidéo et sa description dans le stockage, et renvoie le préfixe.
+def publication_prefix(task: TaskConfig, title: str) -> str:
+    """Le dossier de la vidéo publiée : `channel/date/titre/task_id`.
 
-    Disposition : `channel/date/titre/`. La date est celle de la tâche, pas
-    celle du rendu : republier une tâche la remet au même endroit au lieu d'en
-    semer une copie dans le dossier du jour.
+    La date est celle de la tâche, pas celle du rendu : republier une tâche la
+    remet au même endroit au lieu d'en semer une copie dans le dossier du jour. Le
+    `task_id` en dernier niveau empêche deux runs au même titre, le même jour (un
+    « Relancer » depuis l'interface), de s'écraser.
     """
-    config = task.agent_config
     channel = slugify(task.channel_config.channel_name)
-    title = slugify(plan.publication.title)
     if not channel:
         raise ValueError(
             f"Nom de chaîne inutilisable comme dossier : {task.channel_config.channel_name!r}."
         )
+    return f"{channel}/{task.created_at.date().isoformat()}/{slugify(title)}/{task.task_id}"
 
-    prefix = f"{channel}/{task.created_at.date().isoformat()}/{title}"
+
+def publish_video(task: TaskConfig, plan: VideoPlan, final: Path) -> str:
+    """Range la vidéo et sa description dans le stockage, et renvoie le préfixe."""
+    config = task.agent_config
+    prefix = publication_prefix(task, plan.publication.title)
     notes = final.parent / PUBLISHED_DESCRIPTION
     notes.write_text(publication_text(plan.publication), encoding="utf-8")
 

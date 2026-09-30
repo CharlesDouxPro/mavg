@@ -10,6 +10,7 @@ chaîne ou une campagne, c'est un champ de ce fichier. Si le changer casserait
 l'appel au moteur, c'est une constante de `providers/`.
 """
 
+import copy
 import json
 import os
 import re
@@ -354,29 +355,118 @@ class TaskConfig(BaseModel):
     agent_config: AgentConfig
 
 
-def expand_env(value: Any) -> Any:
-    """Remplace ${VAR} par la variable d'environnement, récursivement.
+SCHEMA_VERSION = 2
+"""Version du format des tâches. L'interface web l'écrit dans chaque tâche qu'elle
+lance ; le worker prévient quand elle diffère de la sienne (une des deux copies de ce
+fichier n'a pas été resynchronisée)."""
 
-    Les secrets restent hors des fichiers de config : ceux-ci ne portent que
-    leur nom, et la valeur se résout au chargement.
+PROVIDERS: dict[str, dict[str, str]] = {
+    "foundry": {
+        "label": "Azure AI Foundry (Claude)",
+        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
+        "token": "${FOUNDRY_API_KEY}",
+    },
+    "sglang": {
+        "label": "Serveur SGLang (MiniMax-H3)",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}",
+    },
+}
+"""Où se joint chaque fournisseur de modèles, et avec quelle clé du worker. Une tâche
+qui enverrait une de ces clés ailleurs est refusée : c'est ce qui empêche une
+`base_url` modifiée d'exfiltrer le token."""
+
+SCRAPERS: dict[str, dict[str, str]] = {
+    "linkup": {"base_url": "https://api.linkup.so/v1", "token": "${LINKUP_API_KEY}"},
+}
+
+ENV_REF = re.compile(r"\$\{(\w+)\}")
+"""Une référence à une variable d'environnement du worker."""
+
+
+def _expand(text: str) -> str:
+    return ENV_REF.sub(lambda m: os.environ.get(m.group(1), ""), text)
+
+
+def expand_secrets(raw: dict) -> dict:
+    """Résout les ${VAR} des seuls champs secrets : clés, tokens, base_url.
+
+    Le reste du document n'est jamais touché. Un brief qui contient
+    `${FOUNDRY_API_KEY}` reste du texte : sinon la vraie clé partirait dans le prompt,
+    voire dans la description publiée. C'est aussi ce qui laisse la syntaxe
+    `${paramètre}` libre pour les paramètres de run de l'interface.
     """
-    if isinstance(value, str):
-        return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
-    if isinstance(value, dict):
-        return {key: expand_env(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [expand_env(item) for item in value]
-    return value
+    doc = copy.deepcopy(raw)
+    agent = doc.get("agent_config")
+    if not isinstance(agent, dict):
+        return doc
+    blocks: list[tuple[Any, tuple[str, ...]]] = [
+        (model, ("base_url", "token")) for model in (agent.get("models") or {}).values()
+    ]
+    blocks += [(agent.get("scraper"), ("token",)), (agent.get("storage"), ("access_key", "secret_key"))]
+    for block, keys in blocks:
+        if not isinstance(block, dict):
+            continue
+        for key in keys:
+            if isinstance(block.get(key), str):
+                block[key] = _expand(block[key])
+    return doc
+
+
+def check_secret_destinations(raw: dict) -> None:
+    """Refuse une tâche qui enverrait une clé du worker ailleurs que chez son fournisseur.
+
+    À appeler sur le document brut, avant `expand_secrets` : une référence `${VAR}`
+    dans `base_url` ou `token` n'est admise que si les deux valent exactement ce que
+    `PROVIDERS` (ou `SCRAPERS`) prévoit pour ce fournisseur.
+    """
+    agent = raw.get("agent_config")
+    if not isinstance(agent, dict):
+        return
+    for role, model in (agent.get("models") or {}).items():
+        if isinstance(model, dict):
+            _check_destination(f"models.{role}", model, PROVIDERS, default_provider="")
+    scraper = agent.get("scraper")
+    if isinstance(scraper, dict):
+        defaults = ScraperConfig()
+        _check_destination(
+            "scraper",
+            {"base_url": defaults.base_url, **scraper},
+            SCRAPERS,
+            default_provider=defaults.provider,
+        )
+
+
+def _check_destination(
+    where: str, block: dict, registry: dict[str, dict[str, str]], default_provider: str
+) -> None:
+    base_url, token = str(block.get("base_url", "")), str(block.get("token", ""))
+    if not (ENV_REF.search(base_url) or ENV_REF.search(token)):
+        return
+    provider = block.get("provider", default_provider)
+    expected = registry.get(provider)
+    if expected is None:
+        raise ValueError(
+            f"{where} : fournisseur {provider!r} inconnu, il ne peut pas utiliser une clé "
+            f"du worker (connus : {', '.join(sorted(registry))})."
+        )
+    if base_url != expected["base_url"] or token not in ("", expected["token"]):
+        raise ValueError(
+            f"{where} : une clé du worker ne part que vers {expected['base_url']} avec "
+            f"{expected['token']} pour le fournisseur {provider!r}."
+        )
 
 
 def load_task(source: Path | str | dict) -> "TaskConfig":
     """Une TaskConfig depuis un fichier JSON ou un document déjà chargé.
 
-    Accepte un document Mongo tel quel : les champs en trop (`_id`) sont ignorés.
+    Accepte un document Mongo tel quel : les champs en trop (`_id`, la provenance et
+    l'avancement écrits par l'interface et le worker) sont ignorés.
     """
     raw = (
         source
         if isinstance(source, dict)
         else json.loads(Path(source).read_text("utf-8"))
     )
-    return TaskConfig.model_validate(expand_env(raw))
+    check_secret_destinations(raw)
+    return TaskConfig.model_validate(expand_secrets(raw))

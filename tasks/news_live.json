@@ -2,7 +2,10 @@
   "created_at": "2026-09-17T09:00:00Z",
   "task_id": "news_gyokeres_live",
   "status": "pending",
-  "channel_name": "hudex-foot",
+  "channel_config": {
+    "channel_name": "hudex-foot",
+    "email": ""
+  },
   "agent_config": {
     "skill": "tiktok-news-article-presentation",
     "brief": {
