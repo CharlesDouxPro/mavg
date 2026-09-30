@@ -1,8 +1,7 @@
-"""Le rapport de fin de lot : un email par chaîne, envoyé à l'adresse de sa ChannelConfig."""
+"""Un e-mail par vidéo terminée, envoyé à l'adresse de sa chaîne (réussie ou en échec)."""
 
 import os
 import smtplib
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -16,7 +15,6 @@ from task_config import TaskConfig
 
 LINK_TTL = timedelta(days=7)
 MAX_ERROR_CHARS = 6000
-SEPARATOR = "\n" + "-" * 40 + "\n\n"
 
 EXPLAIN_PROMPT = """Une tâche du pipeline de génération vidéo a échoué pendant l'étape « {stage} ».
 Explique en français, en trois phrases au plus, à quelqu'un qui n'a pas le code sous les yeux :
@@ -82,43 +80,47 @@ def video_block(result: VideoResult, expires: datetime) -> str:
     )
 
 
-def build_report(sender: str, channel: str, email: str, results: list[VideoResult]) -> EmailMessage:
-    expires = datetime.now() + LINK_TTL
-    ready = sum(1 for result in results if not result.error)
-    failed = len(results) - ready
-
-    subject = f"[{channel}] {ready} vidéo(s) prête(s)"
-    if failed:
-        subject += f", {failed} en échec"
+def build_message(sender: str, result: VideoResult) -> EmailMessage:
+    """L'e-mail d'une seule vidéo, adressé à la chaîne qui l'a produite."""
+    channel = result.task.channel_config
+    if result.error:
+        subject = f"[{channel.channel_name}] Échec : {result.task.task_id}"
+    else:
+        title = result.publication.title if result.publication else result.task.task_id
+        subject = f"[{channel.channel_name}] Vidéo prête : {title}"
 
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = sender
-    message["To"] = email
-    message.set_content(SEPARATOR.join(video_block(result, expires) for result in results))
+    message["To"] = channel.email
+    message.set_content(video_block(result, datetime.now() + LINK_TTL))
     return message
 
 
-def send_reports(results: list[VideoResult]) -> None:
-    groups: dict[tuple[str, str], list[VideoResult]] = defaultdict(list)
-    for result in results:
-        channel = result.task.channel_config
-        groups[(channel.channel_name, channel.email)].append(result)
+def _smtp_password() -> str:
+    """Le mot de passe SMTP, espaces retirés.
 
+    Gmail affiche les mots de passe d'application en quatre groupes séparés par
+    des espaces (« abcd efgh ijkl mnop »), mais le mot de passe réel n'en
+    contient pas : on les retire pour qu'un copier-coller fonctionne quand même.
+    """
+    return os.getenv("SMTP_PASSWORD", "").replace(" ", "")
+
+
+def send_report(result: VideoResult) -> None:
+    """Envoie l'e-mail d'une vidéo terminée, à l'adresse de sa chaîne.
+
+    Appelé dès qu'une vidéo est traitée — une par e-mail, jamais de rapport
+    groupé. Un envoi raté n'arrête pas le worker : la vidéo reste dans le bucket.
+    """
     sender = os.getenv("SMTP_USER", "")
-    messages = [
-        build_report(sender, channel, email, items)
-        for (channel, email), items in groups.items()
-    ]
-
-    # Un envoi raté ne doit pas arrêter le worker : les vidéos restent dans le bucket.
+    message = build_message(sender, result)
     try:
         with smtplib.SMTP_SSL(
             os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", "465"))
         ) as smtp:
-            smtp.login(sender, os.getenv("SMTP_PASSWORD", ""))
-            for message in messages:
-                smtp.send_message(message)
-                print(f"Rapport envoyé à {message['To']} : {message['Subject']}")
+            smtp.login(sender, _smtp_password())
+            smtp.send_message(message)
+            print(f"E-mail envoyé à {message['To']} : {message['Subject']}")
     except (smtplib.SMTPException, OSError) as exc:
-        print(f"Rapports non envoyés : {exc}")
+        print(f"E-mail non envoyé ({result.task.task_id}) : {exc}")

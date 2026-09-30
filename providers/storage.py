@@ -126,20 +126,29 @@ def download(config: StorageConfig, uri: str) -> Path:
         if _is_fresh(dest, head["ContentLength"], head["LastModified"]):
             print(f"  [storage] s3://{bucket}/{key} déjà à jour ({dest})")
             return dest
-        print(f"  [storage] s3://{bucket}/{key} -> {dest} "
-              f"({head['ContentLength'] / 1e6:.1f} Mo)")
+        print(
+            f"  [storage] s3://{bucket}/{key} -> {dest} "
+            f"({head['ContentLength'] / 1e6:.1f} Mo)"
+        )
         client.download_file(bucket, key, str(dest))
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "")
         if code in ("404", "NoSuchKey", "NoSuchBucket"):
             raise FileNotFoundError(f"s3://{bucket}/{key} introuvable.") from exc
-        if code in ("403", "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"):
+        if code in (
+            "403",
+            "AccessDenied",
+            "InvalidAccessKeyId",
+            "SignatureDoesNotMatch",
+        ):
             raise PermissionError(
                 f"Accès refusé à s3://{bucket}/{key} : vérifie les clés Scaleway."
             ) from exc
         raise
     except BotoCoreError as exc:
-        raise RuntimeError(f"Stockage injoignable ({config.endpoint_url}) : {exc}") from exc
+        raise RuntimeError(
+            f"Stockage injoignable ({config.endpoint_url}) : {exc}"
+        ) from exc
 
     return dest
 
@@ -179,9 +188,12 @@ def slugify(text: str) -> str:
     """
     folded = unicodedata.normalize("NFKD", text)
     ascii_only = folded.encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-zA-Z0-9]+", "-", ascii_only).strip("-").lower()[
-        :MAX_SLUG_CHARS
-    ].strip("-")
+    return (
+        re.sub(r"[^a-zA-Z0-9]+", "-", ascii_only)
+        .strip("-")
+        .lower()[:MAX_SLUG_CHARS]
+        .strip("-")
+    )
 
 
 def upload(config: StorageConfig, path: Path | str, key: str) -> str:
@@ -205,8 +217,10 @@ def upload(config: StorageConfig, path: Path | str, key: str) -> str:
     if content_type.startswith("text/"):
         content_type += "; charset=utf-8"
 
-    print(f"  [storage] {path} -> s3://{config.bucket}/{key} "
-          f"({path.stat().st_size / 1e6:.1f} Mo, {content_type})")
+    print(
+        f"  [storage] {path} -> s3://{config.bucket}/{key} "
+        f"({path.stat().st_size / 1e6:.1f} Mo, {content_type})"
+    )
     try:
         _client(config).upload_file(
             str(path),
@@ -216,14 +230,21 @@ def upload(config: StorageConfig, path: Path | str, key: str) -> str:
         )
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "")
-        if code in ("403", "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"):
+        if code in (
+            "403",
+            "AccessDenied",
+            "InvalidAccessKeyId",
+            "SignatureDoesNotMatch",
+        ):
             raise PermissionError(
                 f"Écriture refusée sur s3://{config.bucket}/{key} : "
                 f"vérifie les droits des clés Scaleway."
             ) from exc
         raise
     except BotoCoreError as exc:
-        raise RuntimeError(f"Stockage injoignable ({config.endpoint_url}) : {exc}") from exc
+        raise RuntimeError(
+            f"Stockage injoignable ({config.endpoint_url}) : {exc}"
+        ) from exc
 
     return f"s3://{config.bucket}/{key}"
 
@@ -233,15 +254,21 @@ def list_keys(config: StorageConfig, prefix: str) -> set[str]:
     if config.provider != "scaleway":
         raise ValueError(f"Fournisseur de stockage inconnu : {config.provider!r}.")
     try:
-        pages = _client(config).get_paginator("list_objects_v2").paginate(
-            Bucket=config.bucket, Prefix=prefix
+        pages = (
+            _client(config)
+            .get_paginator("list_objects_v2")
+            .paginate(Bucket=config.bucket, Prefix=prefix)
         )
         return {obj["Key"] for page in pages for obj in page.get("Contents", [])}
     except BotoCoreError as exc:
-        raise RuntimeError(f"Stockage injoignable ({config.endpoint_url}) : {exc}") from exc
+        raise RuntimeError(
+            f"Stockage injoignable ({config.endpoint_url}) : {exc}"
+        ) from exc
 
 
-def presigned_url(config: StorageConfig, uri: str, filename: str, expires_s: int) -> str:
+def presigned_url(
+    config: StorageConfig, uri: str, filename: str, expires_s: int
+) -> str:
     """Un lien de téléchargement signé vers un objet du bucket privé."""
     located = parse_uri(config, uri)
     if located is None:

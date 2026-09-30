@@ -1,7 +1,8 @@
-"""Le point d'entrée : traite les tâches une à une, et envoie les rapports quand la file est vide.
+"""Le point d'entrée : traite les tâches une à une, un e-mail par vidéo terminée.
 
-En mode lot (`EXIT_WHEN_EMPTY=1`, l'instance cloud), le worker s'arrête une fois la file
-vidée et les rapports envoyés. Sinon, il attend les tâches suivantes.
+Chaque vidéo (réussie ou en échec) déclenche son propre e-mail dès qu'elle est
+traitée. En mode lot (`EXIT_WHEN_EMPTY=1`, l'instance cloud), le worker s'arrête
+une fois la file vidée. Sinon, il attend les tâches suivantes.
 """
 
 import os
@@ -17,7 +18,7 @@ from agents.video_planner import (
     produce_video,
     publish_video,
 )
-from alerting import VideoResult, send_reports
+from alerting import VideoResult, send_report
 from providers.mongo_db_provider import MongoDB
 from task_config import TaskConfig, load_task
 
@@ -75,15 +76,11 @@ def run_task(client: MongoDB, task: TaskConfig) -> VideoResult:
 def main() -> None:
     mongodb = MongoDB(MONGO_CONNECTION_STRING, DB_NAME)
     fail_interrupted(mongodb)
-    results: list[VideoResult] = []
     while True:
         task = pull_task(mongodb)
         if task:
-            results.append(run_task(mongodb, task))
+            send_report(run_task(mongodb, task))
             continue
-        if results:
-            send_reports(results)
-            results = []
         if EXIT_WHEN_EMPTY:
             print("Empty queue")
             return
