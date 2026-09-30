@@ -61,8 +61,10 @@ if [[ -n "${SCW_SECRET_KEY:-}" ]]; then
   docker login rg.fr-par.scw.cloud -u nologin --password-stdin <<< "$SCW_SECRET_KEY" > /dev/null
 fi
 
-if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
-  echo "$IMAGE est déjà dans le registre : rien à faire."
+# Les secrets ne sont pas dans git : après en avoir changé un, le SHA est le même mais l'image
+# doit être reconstruite. FORCE=1 la reconstruit et remplace le tag.
+if [[ -z "${FORCE:-}" ]] && docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+  echo "$IMAGE est déjà dans le registre : rien à faire (FORCE=1 pour la reconstruire, par exemple après un changement de secret)."
   exit 0
 fi
 
