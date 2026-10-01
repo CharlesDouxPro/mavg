@@ -55,8 +55,9 @@ model renders as audio.
 
 The brief's mood drives pacing, framing, ambience and sound.
 
-Your avatar carries the video — H3 generations are for shots where they are on screen
-and speaking. To show a real, little-known entity (a specific product, logo, place or
+Your avatar carries the video — H3 generations are for shots where they are on screen.
+They speak in every shot, unless the constraints allow a few silent shots (a gesture, a
+reaction, a beat) where they stay on screen with their lips closed. To show a real, little-known entity (a specific product, logo, place or
 person), fetch a still with `search_web_image` and drop it in with `add_media_clip`.
 There is no stock b-roll here.
 

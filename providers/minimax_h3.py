@@ -57,7 +57,8 @@ class MinimaxShot(BaseModel):
     )
     spoken_line: str = Field(
         description="La réplique, dans la langue demandée. Doit apparaître mot "
-        "pour mot dans <d>[...]</d> à l'intérieur du prompt."
+        "pour mot dans <d>[...]</d> à l'intérieur du prompt. Vide pour un plan "
+        "muet, si le channel en autorise : l'avatar est à l'écran sans parler."
     )
     prompt: str = Field(
         description="Prompt H3 full-reference, en anglais, sections `summary:`, "
@@ -75,6 +76,11 @@ class MinimaxShot(BaseModel):
         "n'a pas de prompt négatif) ; en 'punchy_zoom', décris le zoom dans le "
         "mouvement de caméra du prompt.",
     )
+
+    @property
+    def silent(self) -> bool:
+        """Un plan sans réplique : l'avatar y joue la scène sans parler."""
+        return not self.spoken_line.strip()
 
 
 class Publication(BaseModel):
@@ -188,15 +194,24 @@ STABLE_CAMERA_LOCK = (
     "camera_direction:\n"
     "The camera is static and locked off on a tripod for the entire shot: no "
     "zoom in or out, no push-in, no dolly, no pan, no tilt, no handheld drift. "
-    "The framing stays completely fixed while the subject speaks.\n\n"
+    "The framing stays completely fixed for the whole shot.\n\n"
+)
+
+
+# Préfixé à un plan muet, après la caméra : faute de prompt négatif, on dit ce qu'on
+# entend (l'ambiance) plutôt que ce qu'on ne veut pas (la parole).
+SILENT_LOCK = (
+    "audio_direction:\n"
+    "<Subject 1> keeps their lips closed for the entire shot. The soundtrack carries "
+    "only the ambient sound of the scene and the music.\n\n"
 )
 
 
 def camera_lock(camera_motion: str) -> str:
     """Le bloc de caméra préfixé au prompt, selon `camera_motion`.
 
-    Sur un plan `stable`, on impose une caméra fixe : l'avatar parle, le plan ne
-    doit pas bouger. Sur `punchy_zoom`, rien n'est préfixé — le zoom vif est
+    Sur un plan `stable`, on impose une caméra fixe : le plan ne doit pas bouger,
+    que l'avatar parle ou non. Sur `punchy_zoom`, rien n'est préfixé — le zoom vif est
     décrit par l'agent dans le prompt du plan.
     """
     return STABLE_CAMERA_LOCK if camera_motion == "stable" else ""
@@ -224,10 +239,16 @@ def build_payload(
     nu évite l'encodage des espaces/accents du nom de fichier) : la frame porte
     l'identité visuelle, `references` les autres sujets (dans cet ordre : le
     moteur numérote ses images `<Picture N>` comme elles arrivent), `voice`
-    (optionnelle) la voix, la même à chaque plan. Le prompt est préfixé par le
-    verrou d'identité PUIS le verrou de caméra — la stabilité passe par le
+    (optionnelle) la voix, la même à chaque plan parlé. Le prompt est préfixé par
+    le verrou d'identité PUIS le verrou de caméra — la stabilité passe par le
     positif, faute de prompt négatif.
+
+    Un plan muet part sans la voix (une référence audio liée à « S1 speaks every
+    line » pousserait le moteur à faire parler l'avatar quand même) et avec
+    `SILENT_LOCK`, qui dit en positif que l'avatar se tait.
     """
+    if shot.silent:
+        voice = None
     duration = float(max(MIN_SECONDS, min(MAX_SECONDS, shot.seconds)))
     conditions = [{"type": "image", "uri": reference_path(reference), "role": "reference"}]
     conditions += [
@@ -239,10 +260,11 @@ def build_payload(
             {"type": "audio", "uri": reference_path(voice, "Voix de référence"), "role": "reference"}
         )
     lock = identity_lock(avatar, voiced=voice is not None, references=len(references))
+    silence = SILENT_LOCK if shot.silent else ""
     return {
         "model": model_name,
         "task": TASK,
-        "prompt": lock + camera_lock(shot.camera_motion) + shot.prompt,
+        "prompt": lock + camera_lock(shot.camera_motion) + silence + shot.prompt,
         "conditions": conditions,
         "seconds": int(round(duration)),
         "target": {

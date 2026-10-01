@@ -175,6 +175,9 @@ class PlanConstraints(BaseModel):
     )
     """Vocabulaire interdit dans les prompts : l'apparence est déjà verrouillée
     en amont, la décrire à nouveau la fait dériver."""
+    max_silent_shots: int = Field(default=0, ge=0)
+    """Combien de plans peuvent se passer de réplique : l'avatar reste à l'écran, sans
+    parler (un geste, une réaction, un temps). 0 : il parle dans chaque plan."""
 
 
 class SubtitleSettings(BaseModel):
@@ -407,7 +410,7 @@ class TaskConfig(BaseModel):
     agent_config: AgentConfig
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 """Version du format des tâches. L'interface web l'écrit dans chaque tâche qu'elle
 lance ; le worker prévient quand elle diffère de la sienne (une des deux copies de ce
 fichier n'a pas été resynchronisée)."""

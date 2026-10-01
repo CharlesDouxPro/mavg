@@ -214,7 +214,11 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         index: position dans la timeline, à partir de 1.
         role: rôle du plan dans l'arc du style suivi.
         seconds: durée du clip.
-        spoken_line: la réplique, dans la langue du traitement.
+        spoken_line: la réplique, dans la langue du traitement. Vide pour un plan
+            muet, si les contraintes en autorisent : l'avatar y reste à l'écran et
+            joue la scène sans parler ; le prompt n'a alors ni (S1) ni <d>, dit en
+            positif qu'il garde les lèvres closes, et décrit son geste, son
+            expression et le son ambiant.
         prompt: le prompt H3 full-reference, en anglais, sections `summary:`,
             `detailed_description:`, `overall_soundscape:`, `non_diegetic_music:`.
             N'écris pas `subject_definitions:` ni `retention_analysis:`. Le moteur
@@ -329,6 +333,20 @@ def check_plan(
             f"{limits.min_total_seconds}-{limits.max_total_seconds}s."
         )
 
+    silent = [i for i in indexes if draft.shots[i].silent]
+    if len(silent) > limits.max_silent_shots:
+        allowed = (
+            f"le channel en autorise {limits.max_silent_shots}"
+            if limits.max_silent_shots
+            else "l'avatar parle dans chaque plan"
+        )
+        errors.append(
+            f"Plans sans réplique : {silent} ({allowed}). Donne une réplique à "
+            f"{len(silent) - limits.max_silent_shots} d'entre eux."
+        )
+    elif silent and len(silent) == len(indexes):
+        errors.append("Aucun plan ne parle : au moins un plan porte une réplique.")
+
     roles = [draft.shots[i].role for i in indexes]
     if limits.arc:
         unknown = [r for r in roles if r not in limits.arc]
@@ -377,16 +395,26 @@ def check_plan(
                 f"{tag}: {', '.join(f'<Subject {n}>' for n in undefined)} n'a pas "
                 f"d'image de référence. Sujets disponibles : {known}."
             )
-        if "(s1)" not in low:
-            errors.append(f"{tag}: l'ID de locuteur (S1) est absent.")
-
         dialogue = re.findall(r"<d>\[(\w+)\](.*?)</d>", prompt, re.DOTALL)
-        if not dialogue:
-            errors.append(
-                f"{tag}: la réplique doit être dans detailed_description, "
-                f"balisée <d>[Langue] ... </d>."
-            )
+        if shot.silent:
+            # L'avatar est à l'écran sans parler : rien à lui faire dire, ni à chronométrer.
+            # Toute trace de parole compte, même mal balisée : ce plan part sans la voix.
+            if "(s1)" in low or re.search(r"<d\b", low):
+                fix = (
+                    "retire (S1) et la réplique du prompt, ou mets la réplique dans spoken_line"
+                    if limits.max_silent_shots
+                    else "recopie la réplique dans spoken_line, mot pour mot"
+                )
+                errors.append(f"{tag}: spoken_line est vide mais le prompt fait parler l'avatar : {fix}.")
         else:
+            if "(s1)" not in low:
+                errors.append(f"{tag}: l'ID de locuteur (S1) est absent.")
+            if not dialogue:
+                errors.append(
+                    f"{tag}: la réplique doit être dans detailed_description, "
+                    f"balisée <d>[Langue] ... </d>."
+                )
+        if dialogue and not shot.silent:
             expected_tag = LANGUAGE_NAMES.get(language.lower()) if language else None
             wrong = {d[0] for d in dialogue if expected_tag and d[0] != expected_tag}
             if wrong:
@@ -408,7 +436,7 @@ def check_plan(
                     f"Raccourcis ou découpe."
                 )
 
-        if humanizer is not None:
+        if humanizer is not None and not shot.silent:
             tells = humanizer.check(shot.spoken_line)
             if tells:
                 errors.append(
@@ -533,7 +561,8 @@ quelqu'un qui parle.
 
 Chaque prompt doit être riche et explicite : composition, position du sujet,
 environnement et lumière, actions et changements d'état, mouvement de caméra,
-son, et la réplique exacte. Un résumé d'intention ne suffit pas.
+son, et la réplique exacte quand le plan parle. Un résumé d'intention ne suffit
+pas.
 
 Caméra : par défaut le plan est STABLE (camera_motion="stable"), caméra fixe,
 aucun zoom — c'est la règle dès que l'avatar parle (contexte, explication,
@@ -562,6 +591,17 @@ def describe_constraints(
             f"- Débit de parole : environ {limits.words_per_second} mots par seconde.",
             f"- detailed_description : au moins {limits.min_description_words} mots.",
             f"- Arc narratif : {' → '.join(limits.arc)}." if limits.arc else "",
+            (
+                f"- Plans muets : au plus {limits.max_silent_shots}. L'avatar y reste à "
+                "l'écran sans parler (un geste, une réaction, un temps) : spoken_line "
+                "vide, ni (S1) ni <d> dans le prompt. Écris le silence en positif : "
+                "<Subject 1> garde les lèvres closes, seuls le son ambiant et la musique "
+                "s'entendent. Sers-t'en quand un geste ou une réaction raconte mieux "
+                "qu'une réplique, ou quand le brief demande un temps muet. Au moins un "
+                "plan parle."
+                if limits.max_silent_shots
+                else "- L'avatar parle dans chaque plan."
+            ),
             "- Ne décris jamais l'apparence du sujet : elle est verrouillée en amont.",
             (f"- Titre de la vidéo : {published.min_title_chars}-"
             f"{published.max_title_chars} caractères."),
@@ -608,7 +648,26 @@ def plan_video(task: TaskConfig) -> tuple[VideoPlan, Draft, int]:
         {"messages": [{"role": "user", "content": config.user_message()}]},
         config={"recursion_limit": config.llm.max_iterations},
     )
-    return result["structured_response"], draft, len(result["messages"])
+    return validated(result["structured_response"], draft), draft, len(result["messages"])
+
+
+def validated(plan: VideoPlan, draft: Draft) -> VideoPlan:
+    """Le plan rendu, avec les plans et la publication que `validate_plan` a vérifiés.
+
+    La sortie structurée est une recopie que le modèle réécrit à la fin, sans contrôle :
+    un plan dont la réplique y reviendrait vide partirait sans la voix (et l'inverse). Ce
+    sont les plans du brouillon, ceux qui ont obtenu PLAN VALIDE, qui partent au rendu.
+    """
+    if not draft.shots:
+        return plan
+    shots = [draft.shots[i] for i in sorted(draft.shots)]
+    return plan.model_copy(
+        update={
+            "shots": shots,
+            "total_duration_s": sum(shot.seconds for shot in shots),
+            "publication": draft.publication or plan.publication,
+        }
+    )
 
 
 def prepare_avatar(task: TaskConfig) -> Path:
@@ -674,7 +733,11 @@ def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
     for position, (ref, path) in enumerate(zip(config.references, references)):
         print(f"<Subject {reference_number(position)}> {ref.name} : {path}")
     print(f"Voix de référence : {voice or 'aucune (le modèle invente une voix par plan)'}")
-    print(f"Verrou d'identité : {len(lock)} caractères préfixés à chaque plan")
+    silent = [shot.index for shot in plan.shots if shot.silent]
+    if silent:
+        print(f"Plans muets (rendus sans la voix) : {silent}")
+    spoken = " parlé (un plan muet perd la ligne de voix)" if voice is not None and silent else ""
+    print(f"Verrou d'identité : {len(lock)} caractères préfixés à chaque plan{spoken}")
     print("=" * 70)
     return asyncio.run(
         generate_videos(
@@ -809,7 +872,7 @@ def main() -> None:
     for shot in plan.shots:
         print(f"\n{'-' * 70}")
         print(f"[{shot.index}] {shot.role.upper()} — {shot.seconds}s")
-        print(f"Réplique : {shot.spoken_line}")
+        print(f"Réplique : {shot.spoken_line}" if not shot.silent else "Plan muet")
         print(f"\n{shot.prompt}")
 
     print(f"\n{'=' * 70}\nPUBLICATION\n{'=' * 70}")
