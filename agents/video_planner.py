@@ -42,14 +42,19 @@ from task_config import (
     LANGUAGE_NAMES,
     PlanConstraints,
     PublicationConstraints,
+    ReferenceImage,
     TaskConfig,
     load_task,
+    reference_number,
 )
 
 # Disposition du repo, pas un réglage.
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = ROOT / "skills"
 HUMANIZER_MODULE = SKILLS_DIR / "writing/humanizer/includes/humanizer.py"
+
+# Ce que le chargeur d'images de MiniMax-H3 lit directement (Pillow : JPEG, PNG, WebP).
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 # Contrat du format de prompt H3 : ce n'est pas un réglage, c'est l'API du moteur.
 REQUIRED_SECTIONS = [
@@ -266,7 +271,7 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         À appeler après avoir posé tous les plans, et après chaque correction.
         """
         errors = check_plan(
-            draft, limits, config.publication, humanizer, config.language
+            draft, limits, config.publication, humanizer, config.language, config.references
         )
         result = "PLAN VALIDE" if not errors else "PROBLEMES:\n- " + "\n- ".join(errors)
         print(
@@ -293,9 +298,14 @@ def check_plan(
     publication: PublicationConstraints,
     humanizer,
     language: str = "",
+    references: list[ReferenceImage] | None = None,
 ) -> list[str]:
     """Les problèmes du plan courant, en clair, dans l'ordre où les corriger."""
     errors: list[str] = []
+    references = references or []
+    # Les seuls sujets qui existent : l'avatar et une image par référence. L'agent ne
+    # rédige pas subject_definitions, un autre label n'aurait pas de définition.
+    subjects = {1} | {reference_number(i) for i in range(len(references))}
 
     if draft.treatment is None:
         errors.append("Aucun traitement : appelle save_treatment d'abord.")
@@ -358,6 +368,15 @@ def check_plan(
 
         if "<subject 1>" not in low:
             errors.append(f"{tag}: le sujet doit être désigné par <Subject 1>.")
+        undefined = sorted(
+            {int(n) for n in re.findall(r"<subject (\d+)>", low)} - subjects
+        )
+        if undefined:
+            known = ", ".join(f"<Subject {n}>" for n in sorted(subjects))
+            errors.append(
+                f"{tag}: {', '.join(f'<Subject {n}>' for n in undefined)} n'a pas "
+                f"d'image de référence. Sujets disponibles : {known}."
+            )
         if "(s1)" not in low:
             errors.append(f"{tag}: l'ID de locuteur (S1) est absent.")
 
@@ -414,6 +433,17 @@ def check_plan(
                 f"{tag}: le prompt décrit l'apparence du sujet "
                 f"({', '.join(leaked)}). L'identité est verrouillée en amont : "
                 f"décris l'action autour, pas le physique."
+            )
+
+    # Une image fournie au lancement est là pour être vue : un sujet jamais cité part
+    # au moteur sans que rien ne le mette en scène.
+    prompts = " ".join(draft.shots[i].prompt.lower() for i in indexes)
+    for position, reference in enumerate(references):
+        label = f"<Subject {reference_number(position)}>"
+        if label.lower() not in prompts:
+            errors.append(
+                f"{label} ({reference.name}) n'apparaît dans aucun plan : son image a été "
+                f"fournie pour qu'on le voie. Mets-le en scène là où le récit le demande."
             )
 
     errors += check_publication(draft.publication, publication, humanizer)
@@ -588,12 +618,18 @@ def prepare_avatar(task: TaskConfig) -> Path:
     lui-même, et l'avatar a pu être remplacé depuis le dernier rendu. La frame
     est recalculée dès que la vidéo est plus récente qu'elle — `ref2va` ne
     conditionne que sur une image, c'est elle qui porte l'identité.
+
+    Un avatar déjà en image (celui qu'un run apporte, souvent) part tel quel,
+    comme les références : il n'a pas de frame à choisir, et ffmpeg en tirerait
+    une au milieu d'une « vidéo » d'une frame — après elle, pour certains JPEG.
     """
     config = task.agent_config
     at = config.avatar.reference_frame_s
     moment = "mid" if at is None else f"{at:g}s".replace(".", "_")
 
     video = storage.download(config.storage, config.avatar.avatar_url)
+    if video.suffix.lower() in IMAGE_SUFFIXES:
+        return video
     # L'instant est dans le nom : changer `reference_frame_s` donne une autre
     # frame, pas la précédente restée en cache.
     frame = video.with_name(f"{video.stem}_reference_{moment}.png")
@@ -615,15 +651,28 @@ def prepare_voice(task: TaskConfig) -> Path | None:
     return storage.download(config.storage, config.avatar.voice_url)
 
 
+def prepare_references(task: TaskConfig) -> list[Path]:
+    """Ramène l'image de chaque autre sujet, dans l'ordre de leur `<Picture N>`.
+
+    Une image n'a pas de frame à choisir : elle part au rendu telle quelle (le
+    moteur lit PNG, JPEG et WebP), la même à chaque plan.
+    """
+    config = task.agent_config
+    return [storage.download(config.storage, ref.image_url) for ref in config.references]
+
+
 def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
     """Rend chaque plan sur le moteur vidéo du channel."""
     config = task.agent_config
     out = Path(config.render.output_dir) / task.task_id
     reference = prepare_avatar(task)
     voice = prepare_voice(task)
-    lock = identity_lock(config.avatar, voiced=voice is not None)
+    references = prepare_references(task)
+    lock = identity_lock(config.avatar, voiced=voice is not None, references=len(references))
     print(f"\n{'=' * 70}\nRendu de {len(plan.shots)} plans sur {config.models.video_generator.model_name}")
     print(f"Référence d'identité : {reference}")
+    for position, (ref, path) in enumerate(zip(config.references, references)):
+        print(f"<Subject {reference_number(position)}> {ref.name} : {path}")
     print(f"Voix de référence : {voice or 'aucune (le modèle invente une voix par plan)'}")
     print(f"Verrou d'identité : {len(lock)} caractères préfixés à chaque plan")
     print("=" * 70)
@@ -633,6 +682,7 @@ def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
             avatar=config.avatar,
             reference=reference,
             voice=voice,
+            references=references,
             model=config.models.video_generator,
             render=config.render,
             output_dir=out,
@@ -776,6 +826,7 @@ def main() -> None:
             render=task.agent_config.render,
             reference=prepare_avatar(task),
             voice=prepare_voice(task),
+            references=prepare_references(task),
         )
         print(f"\n{'=' * 70}\nPayload du plan 1 (--render pour lancer le rendu)")
         print("=" * 70)

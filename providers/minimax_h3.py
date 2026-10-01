@@ -4,10 +4,11 @@ Ce déploiement ne sert que la tâche `ref2va` : l'avatar est la référence
 d'identité, le modèle rend l'image ET son audio en une passe. Les répliques
 parlées et le sound design vivent DANS le prompt.
 
-La référence d'identité est un fichier LOCAL : le bucket qui héberge les
-avatars est privé, et le moteur télécharge ses conditions par un GET sans
-authentification. `providers/storage.py` la ramène, `providers/editing.py` en
-tire la frame, et c'est son chemin qui arrive ici.
+La référence d'identité — comme l'image de chaque autre sujet — est un fichier
+LOCAL : le bucket qui héberge les avatars est privé, et le moteur télécharge
+ses conditions par un GET sans authentification. `providers/storage.py` la
+ramène, `providers/editing.py` en tire la frame, et c'est son chemin qui
+arrive ici.
 
 Découpage : `MinimaxShot` porte ce que l'agent décide (le prompt, la durée, la
 réplique). Tout ce qui doit rester constant d'un plan à l'autre — la seed,
@@ -21,13 +22,14 @@ les bornes 5-15 s. Tout ce qui se règle sans redéploiement vit dans
 """
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field
 
-from task_config import Avatar, ModelConfig, RenderSettings
+from task_config import Avatar, ModelConfig, RenderSettings, reference_number
 
 # Contraintes du moteur : les changer casse l'appel. Le serveur EXIGE `task` à
 # chaque requête (tâches supportées : fl2va, ref2va, t2va) ; ce déploiement ne
@@ -114,7 +116,7 @@ VOICE_RETENTION = (
 )
 
 
-def identity_lock(avatar: Avatar, voiced: bool = False) -> str:
+def identity_lock(avatar: Avatar, voiced: bool = False, references: int = 0) -> str:
     """Bloc `subject_definitions` + `retention_analysis` figeant l'apparence et la voix.
 
     Préfixé à l'identique sur CHAQUE plan : c'est ce qui empêche la coupe, la
@@ -122,20 +124,37 @@ def identity_lock(avatar: Avatar, voiced: bool = False) -> str:
     par l'agent n'ont donc pas à décrire le personnage, et ne doivent pas le
     faire — ils décrivent l'action autour d'une apparence déjà verrouillée.
     `voiced` : une référence audio accompagne le plan, on la lie à la voix du sujet.
+    `references` : le nombre d'images envoyées après celle de l'avatar ; chacune
+    définit son `<Subject N>`, vu dans `<Picture N>` (`reference_number`).
     """
     look = (avatar.appearance or avatar.description or "").strip()
     definitions, retention = [], []
-    if look:
-        definitions.append(
-            "<Subject 1> is the on-camera subject from the reference image. Fixed, "
-            f"invariant appearance (matches the reference exactly): {look}"
-        )
+    if look or references:
+        # Dès qu'il y a plusieurs images, « l'image de référence » ne désigne plus
+        # rien : on nomme celle de l'avatar.
+        source = "<Picture 1>" if references else "the reference image"
+        definition = f"<Subject 1> is the on-camera subject from {source}."
+        if look:
+            definition += f" Fixed, invariant appearance (matches the reference exactly): {look}"
+        definitions.append(definition)
         retention.append(
             "<Subject 1>'s appearance is FULLY PRESERVED and UNCHANGED in every shot - "
             "face, age, hair, facial hair, skin tone, wardrobe and any worn accessories "
             "match the reference and the definition above exactly. Do NOT re-age, "
             "restyle, change the outfit, or add/remove props (glasses, hat, headphones, "
             "microphone) unless the shot description below explicitly requires it."
+        )
+    for position in range(references):
+        number = reference_number(position)
+        definitions.append(
+            f"<Subject {number}> is the subject shown in <Picture {number}>. Fixed, "
+            f"invariant appearance: it matches <Picture {number}> exactly."
+        )
+        retention.append(
+            f"<Subject {number}> (appears in every shot that features it): fully_preserved - "
+            f"its species or kind, shape, proportions, colours, markings, outfit and "
+            f"accessories match <Picture {number}> exactly, identically in every shot. Do "
+            f"NOT redesign, restyle or swap it for a similar-looking subject."
         )
     if voiced:
         definitions.append(VOICE_DEFINITION)
@@ -191,6 +210,7 @@ def build_payload(
     render: RenderSettings,
     reference: Path,
     voice: Path | None = None,
+    references: Sequence[Path] = (),
 ) -> dict:
     """Traduit un plan en payload JSON `POST /v1/videos` pour le serveur SGLang.
 
@@ -202,17 +222,23 @@ def build_payload(
     Les références passent par `conditions`, en `uri` = CHEMIN LOCAL nu (le
     loader H3 sait lire un chemin local ou `file://`, mais pas `s3://` ; le chemin
     nu évite l'encodage des espaces/accents du nom de fichier) : la frame porte
-    l'identité visuelle, `voice` (optionnelle) la voix, la même à chaque plan. Le
-    prompt est préfixé par le verrou d'identité PUIS le verrou de caméra — la
-    stabilité passe par le positif, faute de prompt négatif.
+    l'identité visuelle, `references` les autres sujets (dans cet ordre : le
+    moteur numérote ses images `<Picture N>` comme elles arrivent), `voice`
+    (optionnelle) la voix, la même à chaque plan. Le prompt est préfixé par le
+    verrou d'identité PUIS le verrou de caméra — la stabilité passe par le
+    positif, faute de prompt négatif.
     """
     duration = float(max(MIN_SECONDS, min(MAX_SECONDS, shot.seconds)))
     conditions = [{"type": "image", "uri": reference_path(reference), "role": "reference"}]
+    conditions += [
+        {"type": "image", "uri": reference_path(image, "Image de référence"), "role": "reference"}
+        for image in references
+    ]
     if voice is not None:
         conditions.append(
             {"type": "audio", "uri": reference_path(voice, "Voix de référence"), "role": "reference"}
         )
-    lock = identity_lock(avatar, voiced=voice is not None)
+    lock = identity_lock(avatar, voiced=voice is not None, references=len(references))
     return {
         "model": model_name,
         "task": TASK,
@@ -238,6 +264,7 @@ async def generate_videos(
     avatar: Avatar,
     reference: Path,
     voice: Path | None = None,
+    references: Sequence[Path] = (),
     model: ModelConfig,
     render: RenderSettings,
     output_dir: Path | str,
@@ -267,6 +294,7 @@ async def generate_videos(
                 render=render,
                 reference=reference,
                 voice=voice,
+                references=references,
             )
             resp = await client.post("/videos", json=payload)
             if resp.is_error:

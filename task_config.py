@@ -66,6 +66,35 @@ class Avatar(BaseModel):
     voice_url: str = ""
 
 
+class ReferenceImage(BaseModel):
+    """Un sujet de plus que l'avatar, fixé par une image : le héros d'une histoire,
+    un objet, un décor.
+
+    L'image part au moteur avec CHAQUE plan, après celle de l'avatar : c'est elle qui
+    garde le même personnage d'un clip à l'autre, là où un prompt seul en redessine
+    un nouveau à chaque requête. Numérotation : voir `reference_number`.
+    """
+
+    name: str
+    """Le nom qui la désigne pour l'agent : le paramètre de run qui l'a fournie."""
+    image_url: str
+    """L'image (PNG, JPEG ou WebP) dans le stockage objet, sous la même forme que
+    `Avatar.avatar_url`. Elle est envoyée telle quelle, sans extraction de frame."""
+    description: str = ""
+    """Ce qu'elle représente, en une ligne (« le héros de l'histoire ») : l'agent la
+    lit, le moteur non."""
+
+
+def reference_number(position: int) -> int:
+    """Le N de `<Subject N>` et `<Picture N>` pour la référence n° `position` (dès 0).
+
+    L'image de l'avatar part en premier : il est `<Subject 1>`, vu dans `<Picture 1>`.
+    Les références suivent dans l'ordre de `AgentConfig.references`, et le moteur
+    numérote ses images dans l'ordre où elles arrivent.
+    """
+    return position + 2
+
+
 class Brief(BaseModel):
     """Ce que l'utilisateur demande.
 
@@ -294,6 +323,9 @@ class AgentConfig(BaseModel):
     Vide : l'agent choisit, en général la langue de la source ou du brief."""
     brief: Brief
     avatar: Avatar
+    references: list[ReferenceImage] = Field(default_factory=list)
+    """Les images des autres sujets de la vidéo, choisies au lancement du run. Vide :
+    l'avatar est la seule référence visuelle."""
     llm: LLMSettings = Field(default_factory=LLMSettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
     plan: PlanConstraints = Field(default_factory=PlanConstraints)
@@ -320,6 +352,8 @@ class AgentConfig(BaseModel):
                 f"- {key} : {_preview(value)}" for key, value in self.params.items()
             )
             blocks.append(f"SUJET PRÉCIS DE CETTE VIDÉO\n{lines}")
+        if self.references:
+            blocks.append(f"RÉFÉRENCES VISUELLES\n{self.references_instruction()}")
         if self.skill:
             blocks.append(f"STYLE IMPOSÉ\n{self.skill}")
         if self.language:
@@ -341,6 +375,24 @@ class AgentConfig(BaseModel):
         )
         return line
 
+    def references_instruction(self) -> str:
+        """Qui est quel `<Subject N>` : l'agent ne voit pas les images, seulement ce bloc."""
+        avatar = f"l'avatar ({self.avatar.name})" if self.avatar.name else "l'avatar"
+        lines = [f"- <Subject 1> (<Picture 1>) : {avatar}."]
+        for position, reference in enumerate(self.references):
+            number = reference_number(position)
+            line = f"- <Subject {number}> (<Picture {number}>) : {reference.name}"
+            if description := reference.description.strip():
+                line += f" — {description}"
+            lines.append(line if line.endswith((".", "!", "?")) else f"{line}.")
+        lines.append(
+            "Chaque image part au rendu avec chaque plan : l'apparence de ces sujets est "
+            "verrouillée, ne la décris pas. Désigne-les par leur label dans chaque plan où "
+            "ils apparaissent, et fais apparaître chacun au moins une fois. Un sujet qui "
+            "parle a son propre ID de locuteur, distinct de celui de l'avatar."
+        )
+        return "\n".join(lines)
+
 
 class ChannelConfig(BaseModel):
     channel_name: str
@@ -355,7 +407,7 @@ class TaskConfig(BaseModel):
     agent_config: AgentConfig
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Version du format des tâches. L'interface web l'écrit dans chaque tâche qu'elle
 lance ; le worker prévient quand elle diffère de la sienne (une des deux copies de ce
 fichier n'a pas été resynchronisée)."""
