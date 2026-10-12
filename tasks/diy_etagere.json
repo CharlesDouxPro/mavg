@@ -25,16 +25,16 @@
     },
     "models": {
       "master_mind": {
-        "provider": "foundry",
-        "model_name": "claude-opus-4-7-1",
-        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
-        "token": "${FOUNDRY_API_KEY}"
+        "provider": "sglang-llm",
+        "model_name": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+        "base_url": "${LLM_BASE_URL}",
+        "token": "${LLM_TOKEN}"
       },
       "slm": {
-        "provider": "foundry",
-        "model_name": "claude-haiku-4-5",
-        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
-        "token": "${FOUNDRY_API_KEY}"
+        "provider": "sglang-llm",
+        "model_name": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+        "base_url": "${LLM_BASE_URL}",
+        "token": "${LLM_TOKEN}"
       },
       "video_generator": {
         "provider": "sglang",

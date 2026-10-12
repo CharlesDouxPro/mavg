@@ -23,8 +23,8 @@ def raw() -> dict:
 @pytest.fixture
 def env(monkeypatch):
     for name, value in {
-        "FOUNDRY_RESOURCE": "hudex",
-        "FOUNDRY_API_KEY": "foundry-secret",
+        "LLM_BASE_URL": "http://llm:30000",
+        "LLM_TOKEN": "llm-secret",
         "MINIMAX_BASE_URL": "http://inference:30010/v1",
         "MINIMAX_TOKEN": "dummy",
         "LINKUP_API_KEY": "linkup-secret",
@@ -39,13 +39,13 @@ def test_every_sample_task_loads(path, env):
 
 
 def test_secrets_resolve_but_user_text_stays_literal(raw, env):
-    raw["agent_config"]["brief"]["prompt"] = "Résume ${source_url}, sans jamais citer ${FOUNDRY_API_KEY}"
-    raw["agent_config"]["params"] = {"note": "${FOUNDRY_API_KEY}"}
+    raw["agent_config"]["brief"]["prompt"] = "Résume ${source_url}, sans jamais citer ${LLM_TOKEN}"
+    raw["agent_config"]["params"] = {"note": "${LLM_TOKEN}"}
     task = load_task(raw)
-    assert task.agent_config.models.master_mind.token == "foundry-secret"
-    assert task.agent_config.models.master_mind.base_url == "https://hudex.services.ai.azure.com/anthropic/"
-    assert task.agent_config.brief.prompt == "Résume ${source_url}, sans jamais citer ${FOUNDRY_API_KEY}"
-    assert task.agent_config.params["note"] == "${FOUNDRY_API_KEY}"
+    assert task.agent_config.models.master_mind.token == "llm-secret"
+    assert task.agent_config.models.master_mind.base_url == "http://llm:30000"
+    assert task.agent_config.brief.prompt == "Résume ${source_url}, sans jamais citer ${LLM_TOKEN}"
+    assert task.agent_config.params["note"] == "${LLM_TOKEN}"
 
 
 def test_worker_key_cannot_be_sent_elsewhere(raw, env):
@@ -62,7 +62,7 @@ def test_worker_key_cannot_be_swapped(raw, env):
 
 def test_env_ref_in_base_url_is_only_the_registered_one(raw, env):
     raw["agent_config"]["models"]["slm"]["token"] = "clear-text"
-    raw["agent_config"]["models"]["slm"]["base_url"] = "https://x.example/${FOUNDRY_API_KEY}"
+    raw["agent_config"]["models"]["slm"]["base_url"] = "https://x.example/${LLM_TOKEN}"
     with pytest.raises(ValueError):
         load_task(raw)
 

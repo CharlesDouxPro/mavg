@@ -1,0 +1,111 @@
+{
+  "created_at": "2026-10-12T09:00:00Z",
+  "task_id": "robot_correcteur_telephone",
+  "status": "pending",
+  "channel_config": {
+    "channel_name": "hudex-boomers",
+    "email": ""
+  },
+  "agent_config": {
+    "skill": "",
+    "brief": {
+      "prompt": "Fais une TikTok verticale très courte : une micro-fiction absurde qui donne raison aux boomers. On part d'un reproche que les anciens font aux jeunes, et un bras robotique « correcteur » règle le problème de façon exagérée mais tendre. Le gag se joue en images et en bruitages ; une réplique courte suffit. Un personnage différent à chaque vidéo.",
+      "mood": "comique, absurde, cuts secs, bruitages cartoon, chute satisfaisante"
+    },
+    "params": {
+      "reproche": "les jeunes sont tout le temps sur leur téléphone",
+      "gag": "le soir, une petite fille scrolle dans son lit ; un bras mécanique sort du mur, l'endort d'un petit coup cartoon, lui ferme doucement les yeux et range le téléphone sur la table de nuit"
+    },
+    "models": {
+      "master_mind": {
+        "provider": "sglang-llm",
+        "model_name": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+        "base_url": "${LLM_BASE_URL}",
+        "token": "${LLM_TOKEN}"
+      },
+      "slm": {
+        "provider": "sglang-llm",
+        "model_name": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+        "base_url": "${LLM_BASE_URL}",
+        "token": "${LLM_TOKEN}"
+      },
+      "video_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      },
+      "image_generator": {
+        "provider": "sglang",
+        "model_name": "MiniMaxAI/MiniMax-H3",
+        "base_url": "${MINIMAX_BASE_URL}",
+        "token": "${MINIMAX_TOKEN}"
+      }
+    },
+    "llm": {
+      "max_tokens": 32000,
+      "thinking": true,
+      "effort": "medium",
+      "max_iterations": 40
+    },
+    "render": {
+      "seed": 7,
+      "num_inference_steps": 9,
+      "flow_shift": 12.0,
+      "audio_flow_shift": 3.0,
+      "aspect_ratio": "9:16",
+      "short_edge": 768,
+      "concurrency": 2,
+      "timeout_s": 1800.0,
+      "poll_interval_s": 3.0,
+      "output_dir": "runs"
+    },
+    "plan": {
+      "min_total_seconds": 15,
+      "max_total_seconds": 30,
+      "min_shot_seconds": 5,
+      "max_shot_seconds": 8,
+      "arc": [
+        "hook",
+        "gag",
+        "chute"
+      ],
+      "max_silent_shots": 3,
+      "max_characters": 2
+    },
+    "scraper": {
+      "provider": "linkup",
+      "base_url": "https://api.linkup.so/v1",
+      "token": "${LINKUP_API_KEY}",
+      "mode": "standard",
+      "render_js": false,
+      "extract_images": false,
+      "timeout_s": 60.0,
+      "max_chars": 20000
+    },
+    "language": "fr",
+    "storage": {
+      "provider": "scaleway",
+      "endpoint_url": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "mavg-object-storage",
+      "access_key": "${SCW_ACCESS_KEY}",
+      "secret_key": "${SCW_SECRET_KEY}",
+      "cache_dir": "assets",
+      "timeout_s": 300.0
+    },
+    "subtitles": {
+      "enabled": true,
+      "model": "large-v3",
+      "device": "auto",
+      "compute_type": "auto",
+      "ffmpeg_bin": "",
+      "style": "plain",
+      "base_color": "FFFFFF",
+      "highlight_color": "F5E003",
+      "max_chars": 20,
+      "max_duration_s": 1.6,
+      "max_gap_s": 0.6
+    }
+  }
+}

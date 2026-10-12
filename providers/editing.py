@@ -164,3 +164,25 @@ def extract_frame(video: Path | str, out: Path | str, at_s: float | None = None)
     if not out.is_file() or not out.stat().st_size:
         raise RuntimeError(f"Aucune frame extraite de {video} à {at_s:g}s.")
     return out
+
+
+def room_tone(out: Path | str, seconds: float) -> Path:
+    """Écrit le fond sonore d'une pièce calme (bruit rose très bas), mono 32 kHz.
+
+    Sert de référence à un rendu qui n'a ni image ni voix à donner : ref2va en exige
+    au moins une. Un silence numérique ne dit rien d'un lieu ; un souffle à peine
+    audible se lit comme une pièce silencieuse. Écrit une fois, puis réutilisé.
+    """
+    out = Path(out)
+    if out.is_file() and out.stat().st_size:
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"anoisesrc=color=pink:amplitude=0.002:duration={seconds:g}",
+            "-ar", "32000", "-ac", "1",
+            str(out),
+        ]
+    )
+    return out
