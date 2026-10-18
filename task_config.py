@@ -18,14 +18,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ModelConfig(BaseModel):
     """Un modèle joignable : où, avec quelle clé, sous quel nom de déploiement.
 
-    `model_name` est le nom côté serveur : un déploiement Azure Foundry
-    (`claude-opus-4-7-1`) ou un repo servi par SGLang (`MiniMaxAI/MiniMax-H3`).
+    `model_name` est le nom côté serveur : le repo que sert SGLang
+    (`Qwen/Qwen3.8-27B-FP8`, `MiniMaxAI/MiniMax-H3`).
     """
 
     provider: str
@@ -93,6 +93,20 @@ def reference_number(position: int) -> int:
     numérote ses images dans l'ordre où elles arrivent.
     """
     return position + 2
+
+
+def cast_number(position: int, has_avatar: bool, references: int) -> int:
+    """Le N de `<Subject N>` du personnage inventé n° `position` (dès 0).
+
+    Sans avatar, le premier personnage prend sa place : il est `<Subject 1>`, vu dans
+    `<Picture 1>`. Les autres viennent après les références fournies, qui gardent le
+    numéro de `reference_number` : l'agent l'a lu avant d'inventer qui que ce soit.
+    """
+    if not has_avatar:
+        if position == 0:
+            return 1
+        position -= 1
+    return reference_number(references) + position
 
 
 class Brief(BaseModel):
@@ -178,6 +192,13 @@ class PlanConstraints(BaseModel):
     max_silent_shots: int = Field(default=0, ge=0)
     """Combien de plans peuvent se passer de réplique : l'avatar reste à l'écran, sans
     parler (un geste, une réaction, un temps). 0 : il parle dans chaque plan."""
+    max_characters: int = Field(default=0, ge=0)
+    """Combien de personnages l'agent peut inventer pour cette vidéo, sans image : une
+    fiche écrite par lui, puis un plan de casting qui la fige. 0 : seuls l'avatar et les
+    références fournies apparaissent. Une tâche sans avatar en demande au moins 1."""
+    min_appearance_words: int = 40
+    """Longueur minimale de la fiche d'un personnage inventé. Elle est sa seule
+    description : trop vague, deux plans en dessinent deux personnes différentes."""
 
 
 class SubtitleSettings(BaseModel):
@@ -325,7 +346,9 @@ class AgentConfig(BaseModel):
     """Code ISO de la langue parlée ET de la description (ex. 'fr', 'en').
     Vide : l'agent choisit, en général la langue de la source ou du brief."""
     brief: Brief
-    avatar: Avatar
+    avatar: Avatar | None = None
+    """Le personnage récurrent de la chaîne. Absent : chaque vidéo a ses propres
+    personnages, que l'agent invente (`PlanConstraints.max_characters`)."""
     references: list[ReferenceImage] = Field(default_factory=list)
     """Les images des autres sujets de la vidéo, choisies au lancement du run. Vide :
     l'avatar est la seule référence visuelle."""
@@ -336,6 +359,15 @@ class AgentConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     publication: PublicationConstraints = Field(default_factory=PublicationConstraints)
     subtitles: SubtitleSettings = Field(default_factory=SubtitleSettings)
+
+    @model_validator(mode="after")
+    def _someone_on_screen(self) -> "AgentConfig":
+        if self.avatar is None and not self.plan.max_characters:
+            raise ValueError(
+                "Sans avatar, l'agent invente les personnages de chaque vidéo : "
+                "plan.max_characters doit valoir au moins 1."
+            )
+        return self
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.params.get(key, default)
@@ -357,6 +389,8 @@ class AgentConfig(BaseModel):
             blocks.append(f"SUJET PRÉCIS DE CETTE VIDÉO\n{lines}")
         if self.references:
             blocks.append(f"RÉFÉRENCES VISUELLES\n{self.references_instruction()}")
+        if self.plan.max_characters:
+            blocks.append(f"CASTING\n{self.casting_instruction()}")
         if self.skill:
             blocks.append(f"STYLE IMPOSÉ\n{self.skill}")
         if self.language:
@@ -380,7 +414,10 @@ class AgentConfig(BaseModel):
 
     def references_instruction(self) -> str:
         """Qui est quel `<Subject N>` : l'agent ne voit pas les images, seulement ce bloc."""
-        avatar = f"l'avatar ({self.avatar.name})" if self.avatar.name else "l'avatar"
+        if self.avatar is None:
+            avatar = "le personnage principal, le premier que tu inventes"
+        else:
+            avatar = f"l'avatar ({self.avatar.name})" if self.avatar.name else "l'avatar"
         lines = [f"- <Subject 1> (<Picture 1>) : {avatar}."]
         for position, reference in enumerate(self.references):
             number = reference_number(position)
@@ -393,6 +430,35 @@ class AgentConfig(BaseModel):
             "verrouillée, ne la décris pas. Désigne-les par leur label dans chaque plan où "
             "ils apparaissent, et fais apparaître chacun au moins une fois. Un sujet qui "
             "parle a son propre ID de locuteur, distinct de celui de l'avatar."
+        )
+        return "\n".join(lines)
+
+    def casting_instruction(self) -> str:
+        """Ce que l'agent invente lui-même, faute d'image pour le montrer."""
+        limit = self.plan.max_characters
+        if self.avatar is None:
+            lines = [
+                (
+                    f"Cette chaîne n'a pas d'avatar : chaque vidéo a ses propres personnages. "
+                    f"Invente-les (au plus {limit}) avec cast_characters, AVANT d'écrire les plans."
+                ),
+                (
+                    "Le premier est le personnage principal : il est <Subject 1>, à l'écran "
+                    "dans chaque plan, et c'est lui qui parle en (S1)."
+                ),
+            ]
+        else:
+            lines = [
+                (
+                    f"Si le récit demande d'autres personnages que l'avatar, invente-les (au "
+                    f"plus {limit}) avec cast_characters, avant d'écrire les plans."
+                )
+            ]
+        lines.append(
+            "Aucune image ne les montre : leur fiche les crée. Le rendu tourne d'abord un "
+            "plan de casting par personnage à partir de sa fiche, et l'image qui en sort le "
+            "fige pour toute la vidéo. La fiche est la seule description de son physique : "
+            "les plans ne la répètent pas."
         )
         return "\n".join(lines)
 
@@ -410,16 +476,16 @@ class TaskConfig(BaseModel):
     agent_config: AgentConfig
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 """Version du format des tâches. L'interface web l'écrit dans chaque tâche qu'elle
 lance ; le worker prévient quand elle diffère de la sienne (une des deux copies de ce
 fichier n'a pas été resynchronisée)."""
 
 PROVIDERS: dict[str, dict[str, str]] = {
-    "foundry": {
-        "label": "Azure AI Foundry (Claude)",
-        "base_url": "https://${FOUNDRY_RESOURCE}.services.ai.azure.com/anthropic/",
-        "token": "${FOUNDRY_API_KEY}",
+    "sglang-llm": {
+        "label": "Serveur SGLang (Qwen3.8-27B, sur les GPU de la machine)",
+        "base_url": "${LLM_BASE_URL}",
+        "token": "${LLM_TOKEN}",
     },
     "sglang": {
         "label": "Serveur SGLang (MiniMax-H3)",
@@ -447,7 +513,7 @@ def expand_secrets(raw: dict) -> dict:
     """Résout les ${VAR} des seuls champs secrets : clés, tokens, base_url.
 
     Le reste du document n'est jamais touché. Un brief qui contient
-    `${FOUNDRY_API_KEY}` reste du texte : sinon la vraie clé partirait dans le prompt,
+    `${LINKUP_API_KEY}` reste du texte : sinon la vraie clé partirait dans le prompt,
     voire dans la description publiée. C'est aussi ce qui laisse la syntaxe
     `${paramètre}` libre pour les paramètres de run de l'interface.
     """

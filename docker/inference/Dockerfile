@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 # Serveur d'inférence : sglang sert MiniMax-H3 (ref2va + LoRA fusionnée) sur /v1/videos.
+# La même image sert le LLM de l'agent (service `llm`, llm-entrypoint.sh), sur les mêmes GPU.
 #
 # Les POIDS ne sont pas dans l'image : docker-compose.yml les monte en lecture seule.
 # Les versions viennent de uv.lock, copié de inference_engine : mêmes torch et sglang que
@@ -30,5 +31,6 @@ ENV PATH="/opt/venv/bin:/usr/local/cuda/bin:${PATH}" \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
-EXPOSE 30010
+COPY --chmod=755 llm-entrypoint.sh /usr/local/bin/llm-entrypoint.sh
+EXPOSE 30010 30000
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

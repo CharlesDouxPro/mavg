@@ -6,10 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
-from langchain_anthropic import ChatAnthropic
-
 from agents.video_planner import publication_text
 from providers import storage
+from providers.llm import chat_model
 from providers.minimax_h3 import Publication
 from task_config import TaskConfig
 
@@ -45,12 +44,9 @@ def explain_error(result: VideoResult) -> str:
         error=result.error[-MAX_ERROR_CHARS:],
     )
     try:
-        llm = ChatAnthropic(
-            model=model.model_name,
-            base_url=model.base_url,
-            api_key=model.token,
-            max_tokens=1024,
-        )
+        # Sans raisonnement : Qwen le place avant la réponse, il mangerait les 1024 tokens.
+        # Le délai borne l'attente d'un LLM resté endormi après un rendu en échec.
+        llm = chat_model(model, max_tokens=1024, thinking={"type": "disabled"}, timeout=120)
         return llm.invoke(prompt).text
     except Exception as exc:
         return f"Explication indisponible : {exc}"

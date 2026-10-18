@@ -19,21 +19,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain.agents.structured_output import ProviderStrategy
+from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import tool
-from langchain_anthropic import ChatAnthropic
 from pydantic import ValidationError
 
-from providers import scraper, storage
-from providers.editing import concat_clips, extract_frame, probe_duration
+from providers import gpu_share, scraper, storage
+from providers.editing import concat_clips, extract_frame, probe_duration, room_tone
+from providers.llm import chat_model
 from providers.subtitles import add_subtitles
 from providers.minimax_h3 import (
+    CASTING_SECONDS,
+    MAX_PICTURES,
     MAX_SECONDS,
     MIN_SECONDS,
+    Character,
     MinimaxShot,
     Publication,
     VideoPlan,
     build_payload,
+    casting_prompt,
+    generate_casting,
     generate_videos,
     identity_lock,
 )
@@ -44,6 +49,7 @@ from task_config import (
     PublicationConstraints,
     ReferenceImage,
     TaskConfig,
+    cast_number,
     load_task,
     reference_number,
 )
@@ -106,6 +112,7 @@ class Draft:
         self.treatment: dict | None = None
         self.shots: dict[int, MinimaxShot] = {}
         self.publication: Publication | None = None
+        self.cast: list[Character] = []
         self.loaded: list[str] = []
 
 
@@ -120,6 +127,7 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
     """
     config = task.agent_config
     limits = config.plan
+    has_avatar = config.avatar is not None
     humanizer = _load_module(HUMANIZER_MODULE) if HUMANIZER_MODULE.is_file() else None
 
     @tool
@@ -205,6 +213,29 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         return "Traitement enregistré."
 
     @tool
+    def cast_characters(characters: list[Character]) -> str:
+        """Invente les personnages de cette vidéo et fige leur fiche.
+
+        Aucune image ne les montre : leur fiche les crée. Avant les plans, le rendu
+        tourne un court plan de casting par personnage (seul, immobile, sur fond uni)
+        à partir de sa fiche, et l'image qui en sort sert de référence à chaque plan.
+        La fiche est aussi recopiée mot pour mot en tête de chaque plan : les plans ne
+        décrivent plus son physique, seulement ce qu'il fait.
+
+        characters: tous les personnages, dans l'ordre. Rappeler l'outil remplace la
+            distribution entière. Sans avatar, le premier est le personnage principal :
+            <Subject 1>, à l'écran dans chaque plan, qui parle en (S1).
+        Renvoie le label <Subject N> de chacun, à utiliser dans les plans.
+        """
+        print(f"  [tool] cast_characters({[c.name for c in characters]})")
+        draft.cast = list(characters)
+        numbers = [cast_number(i, has_avatar, len(config.references)) for i in range(len(characters))]
+        lines = [f"- <Subject {n}> : {c.name}" for n, c in zip(numbers, characters)]
+        errors = check_cast(draft.cast, limits, has_avatar, len(config.references))
+        result = "Distribution enregistrée :\n" + "\n".join(lines)
+        return result + ("\nPROBLEMES:\n- " + "\n- ".join(errors) if errors else "")
+
+    @tool
     def add_shot(
         index: int, role: str, seconds: int, spoken_line: str, prompt: str,
         camera_motion: Literal["stable", "punchy_zoom"] = "stable",
@@ -275,7 +306,13 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         À appeler après avoir posé tous les plans, et après chaque correction.
         """
         errors = check_plan(
-            draft, limits, config.publication, humanizer, config.language, config.references
+            draft,
+            limits,
+            config.publication,
+            humanizer,
+            config.language,
+            config.references,
+            has_avatar=has_avatar,
         )
         result = "PLAN VALIDE" if not errors else "PROBLEMES:\n- " + "\n- ".join(errors)
         print(
@@ -284,7 +321,7 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         )
         return result
 
-    return [
+    tools = [
         list_skills,
         load_skill,
         load_skill_include,
@@ -294,6 +331,39 @@ def build_tools(task: TaskConfig, draft: Draft, skills: dict[str, dict]) -> list
         save_publication,
         validate_plan,
     ]
+    # Une chaîne qui n'invente personne ne se voit même pas proposer l'outil.
+    if limits.max_characters:
+        tools.insert(tools.index(add_shot), cast_characters)
+    return tools
+
+
+def check_cast(
+    cast: list[Character], limits: PlanConstraints, has_avatar: bool, references: int
+) -> list[str]:
+    """Les problèmes de la distribution inventée, avant même qu'un plan la mette en scène."""
+    errors: list[str] = []
+    if len(cast) > limits.max_characters:
+        errors.append(
+            f"{len(cast)} personnages inventés, le channel en autorise "
+            f"{limits.max_characters}. Garde ceux dont le récit ne peut pas se passer."
+        )
+    images = int(has_avatar) + references + len(cast)
+    if images > MAX_PICTURES:
+        errors.append(
+            f"{images} images de référence par plan, le moteur en accepte {MAX_PICTURES}. "
+            f"Retire des personnages."
+        )
+    for position, character in enumerate(cast):
+        label = f"<Subject {cast_number(position, has_avatar, references)}> ({character.name})"
+        words = len(character.appearance.split())
+        if words < limits.min_appearance_words:
+            errors.append(
+                f"{label} : fiche trop courte ({words} mots, min {limits.min_appearance_words}). "
+                f"Elle est sa seule description : âge apparent, morphologie, visage, coiffure, "
+                f"tenue complète avec couleurs et matières, accessoires (ou, pour un objet : "
+                f"forme, taille, matières, couleurs, détails)."
+            )
+    return errors
 
 
 def check_plan(
@@ -303,13 +373,26 @@ def check_plan(
     humanizer,
     language: str = "",
     references: list[ReferenceImage] | None = None,
+    has_avatar: bool = True,
 ) -> list[str]:
     """Les problèmes du plan courant, en clair, dans l'ordre où les corriger."""
     errors: list[str] = []
     references = references or []
-    # Les seuls sujets qui existent : l'avatar et une image par référence. L'agent ne
-    # rédige pas subject_definitions, un autre label n'aurait pas de définition.
-    subjects = {1} | {reference_number(i) for i in range(len(references))}
+    cast = draft.cast
+    cast_numbers = [cast_number(i, has_avatar, len(references)) for i in range(len(cast))]
+    # Les seuls sujets qui existent : l'avatar, une image par référence et un casting par
+    # personnage inventé. L'agent ne rédige pas subject_definitions : un autre label
+    # n'aurait pas de définition.
+    subjects = {reference_number(i) for i in range(len(references))} | set(cast_numbers)
+    if has_avatar or cast:
+        subjects.add(1)
+
+    if not has_avatar and not cast:
+        errors.append(
+            "Aucun personnage : la chaîne n'a pas d'avatar. Invente la distribution avec "
+            "cast_characters avant les plans."
+        )
+    errors += check_cast(cast, limits, has_avatar, len(references))
 
     if draft.treatment is None:
         errors.append("Aucun traitement : appelle save_treatment d'abord.")
@@ -390,10 +473,15 @@ def check_plan(
             {int(n) for n in re.findall(r"<subject (\d+)>", low)} - subjects
         )
         if undefined:
-            known = ", ".join(f"<Subject {n}>" for n in sorted(subjects))
+            known = ", ".join(f"<Subject {n}>" for n in sorted(subjects)) or "aucun"
+            invent = (
+                " Un nouveau personnage s'invente avec cast_characters."
+                if limits.max_characters
+                else ""
+            )
             errors.append(
                 f"{tag}: {', '.join(f'<Subject {n}>' for n in undefined)} n'a pas "
-                f"d'image de référence. Sujets disponibles : {known}."
+                f"d'image de référence. Sujets disponibles : {known}.{invent}"
             )
         dialogue = re.findall(r"<d>\[(\w+)\](.*?)</d>", prompt, re.DOTALL)
         if shot.silent:
@@ -457,14 +545,15 @@ def check_plan(
 
         leaked = [w for w in limits.forbidden_appearance_words if w in low]
         if leaked:
+            where = " (pour un personnage inventé, c'est sa fiche qui le décrit)" if cast else ""
             errors.append(
                 f"{tag}: le prompt décrit l'apparence du sujet "
-                f"({', '.join(leaked)}). L'identité est verrouillée en amont : "
+                f"({', '.join(leaked)}). L'identité est verrouillée en amont{where} : "
                 f"décris l'action autour, pas le physique."
             )
 
-    # Une image fournie au lancement est là pour être vue : un sujet jamais cité part
-    # au moteur sans que rien ne le mette en scène.
+    # Une image fournie au lancement, ou un personnage inventé, est là pour être vu : un
+    # sujet jamais cité part au moteur sans que rien ne le mette en scène.
     prompts = " ".join(draft.shots[i].prompt.lower() for i in indexes)
     for position, reference in enumerate(references):
         label = f"<Subject {reference_number(position)}>"
@@ -472,6 +561,13 @@ def check_plan(
             errors.append(
                 f"{label} ({reference.name}) n'apparaît dans aucun plan : son image a été "
                 f"fournie pour qu'on le voie. Mets-le en scène là où le récit le demande."
+            )
+    for number, character in zip(cast_numbers, cast):
+        label = f"<Subject {number}>"
+        if number != 1 and label.lower() not in prompts:
+            errors.append(
+                f"{label} ({character.name}) n'apparaît dans aucun plan : mets-le en scène, "
+                f"ou retire-le de la distribution avec cast_characters."
             )
 
     errors += check_publication(draft.publication, publication, humanizer)
@@ -575,8 +671,16 @@ Contraintes de ce tournage :
 {constraints}
 
 Termine par validate_plan. S'il renvoie des problèmes, corrige avec add_shot
-puis revalide. Ne rends ta réponse structurée qu'une fois PLAN VALIDE obtenu.
+puis revalide. N'appelle VideoPlan, ta réponse finale, qu'une fois PLAN VALIDE obtenu.
 """
+
+
+NUDGE = """\
+Le plan n'est pas terminé : seuls les plans posés avec add_shot et la publication de \
+save_publication partent au rendu, et ils doivent passer validate_plan.
+{report}
+Reprends avec les outils là où tu en es, revalide jusqu'à PLAN VALIDE, puis appelle VideoPlan."""
+MAX_NUDGES = 2
 
 
 def describe_constraints(
@@ -602,7 +706,18 @@ def describe_constraints(
                 if limits.max_silent_shots
                 else "- L'avatar parle dans chaque plan."
             ),
-            "- Ne décris jamais l'apparence du sujet : elle est verrouillée en amont.",
+            (
+                "- Ne décris jamais l'apparence du sujet dans un plan : elle est verrouillée "
+                "en amont (l'image de l'avatar, ou la fiche d'un personnage inventé)."
+                if limits.max_characters
+                else "- Ne décris jamais l'apparence du sujet : elle est verrouillée en amont."
+            ),
+            (
+                f"- Personnages inventés : au plus {limits.max_characters}, chacun avec une "
+                f"fiche d'au moins {limits.min_appearance_words} mots (cast_characters)."
+                if limits.max_characters
+                else ""
+            ),
             (f"- Titre de la vidéo : {published.min_title_chars}-"
             f"{published.max_title_chars} caractères."),
             (f"- Description de publication : {published.min_chars}-{published.max_chars} "
@@ -618,22 +733,22 @@ def describe_constraints(
 def plan_video(task: TaskConfig) -> tuple[VideoPlan, Draft, int]:
     """Fait tourner l'agent et renvoie le plan validé."""
     config = task.agent_config
-    model = config.models.master_mind
     draft = Draft()
+    gpu_share.for_planning()
 
     thinking = {"type": "adaptive"} if config.llm.thinking else {"type": "disabled"}
-    llm = ChatAnthropic(
-        model=model.model_name,
-        base_url=model.base_url,
-        api_key=model.token,
+    llm = chat_model(
+        config.models.master_mind,
         max_tokens=config.llm.max_tokens,
         thinking=thinking,
-        output_config={"effort": config.llm.effort},
+        effort=config.llm.effort,
     )
 
+    tools = build_tools(task, draft, load_skills())
+    validate = next(t for t in tools if t.name == "validate_plan")
     agent = create_agent(
         model=llm,
-        tools=build_tools(task, draft, load_skills()),
+        tools=tools,
         system_prompt=SYSTEM.format(
             constraints=describe_constraints(
                 config.plan,
@@ -641,14 +756,26 @@ def plan_video(task: TaskConfig) -> tuple[VideoPlan, Draft, int]:
                 config.language_instruction() if config.language else "",
             )
         ),
-        response_format=ProviderStrategy(VideoPlan),
+        # Un outil de plus, `VideoPlan` : SGLang ignore la sortie structurée native.
+        response_format=ToolStrategy(VideoPlan),
     )
 
-    result = agent.invoke(
-        {"messages": [{"role": "user", "content": config.user_message()}]},
-        config={"recursion_limit": config.llm.max_iterations},
-    )
-    return validated(result["structured_response"], draft), draft, len(result["messages"])
+    # Le modèle peut finir sans avoir validé : s'arrêter sur du texte (le thinking empêche
+    # de forcer un appel d'outil), ou appeler VideoPlan sans un seul add_shot. On ne sort
+    # qu'avec un brouillon qui passe validate_plan ; sinon il repart sur la même
+    # conversation, avec la liste des problèmes. Le brouillon garde ce qu'il a posé.
+    messages: list = [{"role": "user", "content": config.user_message()}]
+    for _ in range(MAX_NUDGES + 1):
+        result = agent.invoke(
+            {"messages": messages},
+            # Une itération, c'est un appel au modèle puis ses outils : deux pas du graphe.
+            config={"recursion_limit": 2 * config.llm.max_iterations + 1},
+        )
+        report = validate.invoke({}) if draft.shots else "Aucun plan posé avec add_shot."
+        if result.get("structured_response") is not None and report == "PLAN VALIDE":
+            return validated(result["structured_response"], draft), draft, len(result["messages"])
+        messages = [*result["messages"], {"role": "user", "content": NUDGE.format(report=report)}]
+    raise RuntimeError(f"Pas de plan validé malgré {MAX_NUDGES} relances :\n{report}")
 
 
 def validated(plan: VideoPlan, draft: Draft) -> VideoPlan:
@@ -666,6 +793,7 @@ def validated(plan: VideoPlan, draft: Draft) -> VideoPlan:
             "shots": shots,
             "total_duration_s": sum(shot.seconds for shot in shots),
             "publication": draft.publication or plan.publication,
+            "cast": draft.cast,
         }
     )
 
@@ -705,7 +833,7 @@ def prepare_voice(task: TaskConfig) -> Path | None:
     chaque plan, c'est ce qui garde la même voix d'un clip à l'autre.
     """
     config = task.agent_config
-    if not config.avatar.voice_url:
+    if config.avatar is None or not config.avatar.voice_url:
         return None
     return storage.download(config.storage, config.avatar.voice_url)
 
@@ -720,18 +848,55 @@ def prepare_references(task: TaskConfig) -> list[Path]:
     return [storage.download(config.storage, ref.image_url) for ref in config.references]
 
 
+def render_casting(task: TaskConfig, plan: VideoPlan) -> list[Path]:
+    """Tourne le plan de casting de chaque personnage inventé, et renvoie la frame qui le fige.
+
+    Le moteur lit ses conditions sur SON disque : le fond sonore et les frames vivent
+    dans le cache du stockage, que docker-compose monte des deux côtés, et pas dans le
+    dossier du run. Les clips de casting, eux, restent avec les autres clips du run.
+    """
+    config = task.agent_config
+    if not plan.cast:
+        return []
+    shared = Path(config.storage.cache_dir) / "casting"
+    ambience = room_tone(shared / f"room_tone_{CASTING_SECONDS}s.wav", CASTING_SECONDS)
+    print(f"\n{'=' * 70}\nCasting de {len(plan.cast)} personnage(s)")
+    print("=" * 70)
+    clips = asyncio.run(
+        generate_casting(
+            plan.cast,
+            ambience=ambience,
+            model=config.models.video_generator,
+            render=config.render,
+            output_dir=Path(config.render.output_dir) / task.task_id,
+        )
+    )
+    frames = []
+    for character, clip in zip(plan.cast, clips):
+        frame = extract_frame(clip, shared / task.task_id / f"{clip.stem}.png")
+        print(f"  [casting] {character.name} : {clip} -> {frame}")
+        frames.append(frame)
+    return frames
+
+
 def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
-    """Rend chaque plan sur le moteur vidéo du channel."""
+    """Rend chaque plan sur le moteur vidéo du channel, après le casting s'il y en a un."""
     config = task.agent_config
     out = Path(config.render.output_dir) / task.task_id
-    reference = prepare_avatar(task)
+    reference = prepare_avatar(task) if config.avatar else None
     voice = prepare_voice(task)
     references = prepare_references(task)
-    lock = identity_lock(config.avatar, voiced=voice is not None, references=len(references))
+    cast_frames = render_casting(task, plan)
+    lock = identity_lock(
+        config.avatar, voiced=voice is not None, references=len(references), cast=plan.cast
+    )
     print(f"\n{'=' * 70}\nRendu de {len(plan.shots)} plans sur {config.models.video_generator.model_name}")
-    print(f"Référence d'identité : {reference}")
+    print(f"Référence d'identité : {reference or 'la frame de casting du personnage principal'}")
     for position, (ref, path) in enumerate(zip(config.references, references)):
         print(f"<Subject {reference_number(position)}> {ref.name} : {path}")
+    for position, (character, frame) in enumerate(zip(plan.cast, cast_frames)):
+        number = cast_number(position, config.avatar is not None, len(references))
+        print(f"<Subject {number}> {character.name} (casting) : {frame}")
     print(f"Voix de référence : {voice or 'aucune (le modèle invente une voix par plan)'}")
     silent = [shot.index for shot in plan.shots if shot.silent]
     if silent:
@@ -746,6 +911,8 @@ def render_video(task: TaskConfig, plan: VideoPlan) -> list[Path]:
             reference=reference,
             voice=voice,
             references=references,
+            cast=plan.cast,
+            cast_frames=cast_frames,
             model=config.models.video_generator,
             render=config.render,
             output_dir=out,
@@ -835,8 +1002,9 @@ def publish_video(task: TaskConfig, plan: VideoPlan, final: Path) -> str:
 
 
 def produce_video(task: TaskConfig, plan: VideoPlan) -> tuple[list[Path], Path]:
-    """Rend tous les plans, monte, puis sous-titre."""
-    clips = render_video(task, plan)
+    """Rend tous les plans, monte, puis sous-titre. Les GPU sont à H3 le temps du rendu."""
+    with gpu_share.for_rendering():
+        clips = render_video(task, plan)
     return clips, subtitle_video(task, assemble_video(task, clips))
 
 
@@ -869,6 +1037,12 @@ def main() -> None:
         f"Langue : {plan.language} | Durée : {plan.total_duration_s}s "
         f"| {len(plan.shots)} plans"
     )
+    config = task.agent_config
+    for position, character in enumerate(plan.cast):
+        number = cast_number(position, config.avatar is not None, len(config.references))
+        print(f"\n<Subject {number}> {character.name}\n  {character.appearance}")
+        if character.voice:
+            print(f"  Voix : {character.voice}")
     for shot in plan.shots:
         print(f"\n{'-' * 70}")
         print(f"[{shot.index}] {shot.role.upper()} — {shot.seconds}s")
@@ -880,6 +1054,13 @@ def main() -> None:
     print(plan.publication.description)
     print()
     print(" ".join(plan.publication.hashtags))
+
+    if not args.render and plan.cast:
+        # Les frames de casting n'existent qu'une fois rendues : on montre ce qui les fera.
+        print(f"\n{'=' * 70}\nCasting de {plan.cast[0].name} (--render pour le tourner)")
+        print("=" * 70)
+        print(casting_prompt(plan.cast[0]))
+        return
 
     if not args.render:
         payload = build_payload(
